@@ -12,6 +12,35 @@ import { TypingIndicator } from './TypingIndicator';
 import { toast } from 'sonner';
 import { aiSearchArchives, type ArchiveResponse } from '../services/api';
 
+// Helper function to normalize file URIs from Supabase
+const normalizeFileUri = (uri: unknown): string | undefined => {
+  if (!uri) {
+    return undefined;
+  }
+
+  if (typeof uri === 'string') {
+    // If it's a string, check if it's a full URL or relative path
+    // Relative paths should not be used - they'll cause localhost URLs
+    if (uri.startsWith('http://') || uri.startsWith('https://')) {
+      return uri;
+    }
+    // If it's a relative path, skip it - we can't use it
+    console.warn('Received relative path instead of full URL:', uri);
+    return undefined;
+  }
+
+  if (typeof uri === 'object') {
+    const maybeObject = uri as { publicUrl?: string; data?: { publicUrl?: string } };
+    const extractedUrl = maybeObject.publicUrl ?? maybeObject.data?.publicUrl;
+    // Recursively validate the extracted URL
+    if (extractedUrl) {
+      return normalizeFileUri(extractedUrl);
+    }
+  }
+
+  return undefined;
+};
+
 type ChatPanelProps = {
   messages: ChatMessageType[];
   setMessages: React.Dispatch<React.SetStateAction<ChatMessageType[]>>;
@@ -92,17 +121,23 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
       const result = await aiSearchArchives(queryText);
       
       // Convert to ArchiveItem format
-      const searchResults: ArchiveItem[] = result.archives.map((archive: ArchiveResponse) => ({
-        id: archive.id,
-        title: archive.title,
-        description: archive.description || '',
-        type: archive.media_types[0] || 'image',
-        date: archive.dates?.[0] || archive.created_at,
-        tags: archive.tags || [],
-        fileUrl: archive.file_uris?.[0] || archive.storage_paths?.[0] || 'https://via.placeholder.com/400',
-        thumbnail: archive.file_uris?.[0] || archive.storage_paths?.[0] || 'https://via.placeholder.com/400',
-        file_uris: archive.file_uris || archive.storage_paths || [],
-      }));
+      const searchResults: ArchiveItem[] = result.archives.map((archive: ArchiveResponse) => {
+        // Normalize file URIs to extract proper URLs from Supabase objects
+        const normalizedUris = (archive.file_uris || archive.storage_paths || []).map(normalizeFileUri).filter((uri): uri is string => !!uri);
+        const fileUrl = normalizedUris[0] || 'https://via.placeholder.com/400';
+        
+        return {
+          id: archive.id,
+          title: archive.title,
+          description: archive.description || '',
+          type: archive.media_types[0] || 'image',
+          date: archive.dates?.[0] || archive.created_at,
+          tags: archive.tags || [],
+          fileUrl: fileUrl,
+          thumbnail: fileUrl,
+          file_uris: normalizedUris,
+        };
+      });
 
       // Create assistant message with results
       const aiMessage: ChatMessageType = {
@@ -268,17 +303,23 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
           try {
             const result = await aiSearchArchives(query);
             
-            const searchResults: ArchiveItem[] = result.archives.map((archive: ArchiveResponse) => ({
-              id: archive.id,
-              title: archive.title,
-              description: archive.description || '',
-              type: archive.media_types[0] || 'image',
-              date: archive.dates?.[0] || archive.created_at,
-              tags: archive.tags || [],
-              fileUrl: archive.file_uris?.[0] || archive.storage_paths?.[0] || 'https://via.placeholder.com/400',
-              thumbnail: archive.file_uris?.[0] || archive.storage_paths?.[0] || 'https://via.placeholder.com/400',
-              file_uris: archive.file_uris || archive.storage_paths || [],
-            }));
+            const searchResults: ArchiveItem[] = result.archives.map((archive: ArchiveResponse) => {
+              // Normalize file URIs to extract proper URLs from Supabase objects
+              const normalizedUris = (archive.file_uris || archive.storage_paths || []).map(normalizeFileUri).filter((uri): uri is string => !!uri);
+              const fileUrl = normalizedUris[0] || 'https://via.placeholder.com/400';
+              
+              return {
+                id: archive.id,
+                title: archive.title,
+                description: archive.description || '',
+                type: archive.media_types[0] || 'image',
+                date: archive.dates?.[0] || archive.created_at,
+                tags: archive.tags || [],
+                fileUrl: fileUrl,
+                thumbnail: fileUrl,
+                file_uris: normalizedUris,
+              };
+            });
 
             const aiMessage: ChatMessageType = {
               id: (Date.now() + 1).toString(),

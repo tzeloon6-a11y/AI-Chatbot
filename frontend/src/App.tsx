@@ -37,12 +37,23 @@ const normalizeFileUri = (uri: unknown): string | undefined => {
   }
 
   if (typeof uri === 'string') {
-    return uri;
+    // If it's a string, check if it's a full URL or relative path
+    // Relative paths should not be used - they'll cause localhost URLs
+    if (uri.startsWith('http://') || uri.startsWith('https://')) {
+      return uri;
+    }
+    // If it's a relative path, skip it - we can't use it
+    console.warn('Received relative path instead of full URL:', uri);
+    return undefined;
   }
 
   if (typeof uri === 'object') {
     const maybeObject = uri as { publicUrl?: string; data?: { publicUrl?: string } };
-    return maybeObject.publicUrl ?? maybeObject.data?.publicUrl;
+    const extractedUrl = maybeObject.publicUrl ?? maybeObject.data?.publicUrl;
+    // Recursively validate the extracted URL
+    if (extractedUrl) {
+      return normalizeFileUri(extractedUrl);
+    }
   }
 
   return undefined;

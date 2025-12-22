@@ -17,6 +17,19 @@ def get_archive_service() -> ArchiveService:
     return ArchiveService()
 
 
+def normalize_public_url(url_response):
+    """
+    Normalize Supabase public URL response to a string.
+    Handles both string URLs and dictionary responses.
+    """
+    if isinstance(url_response, str):
+        return url_response
+    elif isinstance(url_response, dict):
+        # Supabase Python client may return {'publicUrl': '...'}
+        return url_response.get('publicUrl') or url_response.get('publicurl') or url_response.get('url')
+    return None
+
+
 @router.get("/archives", response_model=List[ArchiveResponse])
 async def get_archives():
     """
@@ -44,7 +57,9 @@ async def get_archives():
                 try:
                     # Get public URL for the storage path
                     public_url_response = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
-                    file_uris.append(public_url_response)
+                    public_url = normalize_public_url(public_url_response)
+                    if public_url:
+                        file_uris.append(public_url)
                 except Exception as e:
                     print(f"Error generating public URL for {storage_path}: {e}")
                     continue
@@ -226,8 +241,16 @@ async def download_archive_file(archive_id: str, file_index: int):
         
         # Generate public URL
         try:
-            public_url = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
+            public_url_response = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
+            public_url = normalize_public_url(public_url_response)
+            if not public_url:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to extract public URL from response"
+                )
             return {"url": public_url, "storage_path": storage_path}
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(
                 status_code=500,
@@ -314,8 +337,10 @@ async def update_archive(
             if "storage_paths" in updated_archive and updated_archive["storage_paths"]:
                 for storage_path in updated_archive["storage_paths"]:
                     try:
-                        public_url = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
-                        file_uris.append(public_url)
+                        public_url_response = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
+                        public_url = normalize_public_url(public_url_response)
+                        if public_url:
+                            file_uris.append(public_url)
                     except Exception as e:
                         print(f"Error generating public URL for {storage_path}: {e}")
             
@@ -348,8 +373,10 @@ async def update_archive(
             if "storage_paths" in updated_archive and updated_archive["storage_paths"]:
                 for storage_path in updated_archive["storage_paths"]:
                     try:
-                        public_url = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
-                        file_uris.append(public_url)
+                        public_url_response = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
+                        public_url = normalize_public_url(public_url_response)
+                        if public_url:
+                            file_uris.append(public_url)
                     except Exception as e:
                         print(f"Error generating public URL for {storage_path}: {e}")
             
@@ -395,8 +422,10 @@ async def update_archive(
         if "storage_paths" in updated_archive and updated_archive["storage_paths"]:
             for storage_path in updated_archive["storage_paths"]:
                 try:
-                    public_url = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
-                    file_uris.append(public_url)
+                    public_url_response = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
+                    public_url = normalize_public_url(public_url_response)
+                    if public_url:
+                        file_uris.append(public_url)
                 except Exception as e:
                     print(f"Error generating public URL for {storage_path}: {e}")
         

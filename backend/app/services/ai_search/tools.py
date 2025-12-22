@@ -11,6 +11,19 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def normalize_public_url(url_response):
+    """
+    Normalize Supabase public URL response to a string.
+    Handles both string URLs and dictionary responses.
+    """
+    if isinstance(url_response, str):
+        return url_response
+    elif isinstance(url_response, dict):
+        # Supabase Python client may return {'publicUrl': '...'}
+        return url_response.get('publicUrl') or url_response.get('publicurl') or url_response.get('url')
+    return None
+
+
 def get_embeddings_model():
     """Get Google's text embedding model."""
     logger.info("Initializing Google text-embedding-004 model")
@@ -115,6 +128,23 @@ def search_archives_db(
                     # The agent doesn't need to see large embedding arrays
                     if 'embedding' in archive:
                         del archive['embedding']
+                    
+                    # Convert storage_paths to file_uris with full public URLs
+                    if 'storage_paths' in archive and archive['storage_paths']:
+                        file_uris = []
+                        for storage_path in archive['storage_paths']:
+                            try:
+                                public_url_response = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
+                                public_url = normalize_public_url(public_url_response)
+                                if public_url:
+                                    file_uris.append(public_url)
+                            except Exception as e:
+                                logger.warning(f"Error generating public URL for {storage_path}: {e}")
+                        
+                        # Set file_uris with full URLs
+                        archive['file_uris'] = file_uris
+                    else:
+                        archive['file_uris'] = []
                     
                     query_results[query].append(archive_id)
                     
