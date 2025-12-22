@@ -16,12 +16,26 @@ Redesign the AI search agent to include intent classification, guardrails, relev
   - Simplified to single embedding generation + single search call
   - Increased default match_count from 5 to 10 for better coverage
   
-- ⬜ **Phase 3: Agent Integration** - NOT STARTED
-  - Need to integrate middleware into agent initialization
-  - Need to add intent classification to agent prompt
-  - Need to update agent to work with single-query tool
+- ✅ **Phase 3: Agent Integration** - COMPLETED
+  - Updated system prompt with intent classification workflow
+  - Integrated `search_refinement_middleware` into agent initialization
+  - Added HERITAGE_SEARCH, UNCLEAR, UNRELATED, GREETING intent categories
+  - Updated agent to generate single focused query (not multiple queries)
+  - Middleware automatically handles retry logic (max 3 attempts)
+  - Agent now responds with text messages for non-search intents
   
-- ⬜ **Phase 4: Response Model Update** - NOT STARTED
+- ✅ **Phase 4: Response Model Update** - COMPLETED
+  - Added `response_type` field to `SearchResponse`: "results" | "message"
+  - Updated `message` field semantics (not just "no results", now for all non-search intents)
+  - Added `_extract_text_message()` helper method in agent to detect non-search responses
+  - Updated endpoint logic to handle two response patterns:
+    * Pattern A: `response_type="results"`, archives populated, message=None
+    * Pattern B: `response_type="message"`, archives=[], message populated
+  - Updated streaming endpoint similarly with new event types
+  - Updated agent `search()` to return message field for non-search intents
+  - Updated agent `search_stream()` to emit "message" events
+  - Updated OpenAPI schema examples to show both response patterns
+  
 - ⬜ **Phase 5: Frontend Update** - NOT STARTED
 - ⬜ **Phase 6: Testing & Rollout** - NOT STARTED
 

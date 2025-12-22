@@ -5,7 +5,7 @@ Returns ONLY structured archive data, NO text responses.
 Perfect for modern chat UX with immediate feedback.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -49,64 +49,99 @@ class ArchiveResult(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    """Clean search response - only structured data."""
-    archives: List[ArchiveResult]
-    total: int
-    query: str
-    message: str | None = None  # Only for "no results" case
+    """Search response supporting both results and text messages."""
+    response_type: str = Field(..., description="Type of response: 'results' or 'message'")
+    archives: List[ArchiveResult] = Field(default=[], description="Archive results (empty if response_type='message')")
+    total: int = Field(default=0, description="Total number of archives found")
+    query: str = Field(..., description="Echo of user query")
+    message: str | None = Field(None, description="Text message for non-search intents or no results")
     
     class Config:
         json_schema_extra = {
-            "example": {
-                "archives": [
-                    {
-                        "id": "uuid-here",
-                        "title": "Traditional Batik Patterns",
-                        "description": "Collection of batik patterns",
-                        "media_types": ["image"],
-                        "dates": ["2024-01-15T00:00:00Z"],
-                        "tags": ["batik", "textile"],
-                        "file_uris": ["https://storage.url/file.jpg"],
-                        "created_at": "2024-01-15T10:00:00Z",
-                        "similarity": 0.85
-                    }
-                ],
-                "total": 1,
-                "query": "batik"
-            }
+            "examples": [
+                {
+                    "response_type": "results",
+                    "archives": [
+                        {
+                            "id": "uuid-here",
+                            "title": "Traditional Batik Patterns",
+                            "description": "Collection of batik patterns",
+                            "media_types": ["image"],
+                            "dates": ["2024-01-15T00:00:00Z"],
+                            "tags": ["batik", "textile"],
+                            "file_uris": ["https://storage.url/file.jpg"],
+                            "created_at": "2024-01-15T10:00:00Z",
+                            "similarity": 0.85
+                        }
+                    ],
+                    "total": 1,
+                    "query": "batik",
+                    "message": None
+                },
+                {
+                    "response_type": "message",
+                    "archives": [],
+                    "total": 0,
+                    "query": "hello",
+                    "message": "Hello! I'm here to help you search our heritage archive..."
+                }
+            ]
         }
 
 
 @router.post("/ai-search", response_model=SearchResponse)
 async def ai_search(request: SearchRequest):
     """
-    AI-powered archive search returning ONLY structured results.
+    AI-powered archive search with intent classification.
     
-    NO text responses - only structured archive data.
-    If no results found, returns empty array with message.
+    **Intent Classification:**
+    - HERITAGE_SEARCH: Returns structured archive results (response_type="results")
+    - UNCLEAR/UNRELATED/GREETING: Returns text message (response_type="message")
     
-    **Clean Response Format:**
-    - archives: Array of matching archives
-    - total: Count of results
-    - query: Echo of user query (for confirmation)
-    - message: Only present if no results ("No matching archives found")
+    **Response Formats:**
+    
+    1. **Search Results** (response_type="results"):
+       - archives: Array of matching archives
+       - total: Count of results
+       - query: Echo of user query
+       - message: null
+    
+    2. **Text Message** (response_type="message"):
+       - archives: [] (empty)
+       - total: 0
+       - query: Echo of user query
+       - message: Text response (clarification, greeting, or polite decline)
     
     **Features:**
-    - Automatic multi-query generation (3-5 diverse variations)
-    - Vector similarity search across all queries
-    - Deduplication by archive ID
+    - Intent classification (HERITAGE_SEARCH, UNCLEAR, UNRELATED, GREETING)
+    - Focused single query generation
+    - Automatic search refinement with retry (max 3 attempts)
     - Thread-based conversation persistence
     
-    **Example:**
+    **Examples:**
     ```
     POST /ai-search
     {"query": "batik", "thread_id": "user-123"}
     
     Response:
     {
+      "response_type": "results",
       "archives": [...],
       "total": 5,
-      "query": "batik"
+      "query": "batik",
+      "message": null
+    }
+    
+    POST /ai-search
+    {"query": "hello", "thread_id": "user-123"}
+    
+    Response:
+    {
+      "response_type": "message",
+      "archives": [],
+      "total": 0,
+      "query": "hello",
+      "message": "Hello! I'm here to help you search our heritage archive..."
     }
     ```
     """
@@ -120,19 +155,38 @@ async def ai_search(request: SearchRequest):
             thread_id=request.thread_id
         )
         
-        # Build response
+        # Check if agent returned a text message (non-search intent)
+        text_message = result.get("message")
         archives = result.get("archives", [])
         total = result.get("total", 0)
         
-        response_data = {
-            "archives": archives,
-            "total": total,
-            "query": request.query
-        }
-        
-        # Only add message if no results
-        if total == 0:
-            response_data["message"] = "No matching archives found"
+        if text_message:
+            # Non-search intent (UNCLEAR, UNRELATED, GREETING)
+            response_data = {
+                "response_type": "message",
+                "archives": [],
+                "total": 0,
+                "query": request.query,
+                "message": text_message
+            }
+        elif total > 0:
+            # Search results found
+            response_data = {
+                "response_type": "results",
+                "archives": archives,
+                "total": total,
+                "query": request.query,
+                "message": None
+            }
+        else:
+            # No results found after retries
+            response_data = {
+                "response_type": "message",
+                "archives": [],
+                "total": 0,
+                "query": request.query,
+                "message": "I couldn't find relevant heritage materials matching your query. Try describing what you're looking for in different words, or browse our collection for inspiration."
+            }
         
         return SearchResponse(**response_data)
         
@@ -146,9 +200,9 @@ async def ai_search(request: SearchRequest):
 @router.post("/ai-search/stream")
 async def ai_search_stream(request: SearchRequest):
     """
-    Streaming AI search with progressive updates.
+    Streaming AI search with intent classification and progressive updates.
     
-    Returns Server-Sent Events (SSE) in clean format:
+    Returns Server-Sent Events (SSE) supporting both results and text messages:
     
     **Event Types:**
     - `query_received`: Immediate acknowledgment
@@ -166,9 +220,18 @@ async def ai_search_stream(request: SearchRequest):
       {"type": "results", "archives": [...], "total": 5}
       ```
     
-    - `done`: Final completion with all results
+    - `message`: Text response for non-search intents
       ```json
-      {"type": "done", "archives": [...], "total": 5, "message": "..."}
+      {"type": "message", "message": "Hello! I'm here to help..."}
+      ```
+    
+    - `done`: Final completion
+      ```json
+      {"type": "done", "response_type": "results", "archives": [...], "total": 5}
+      ```
+      or
+      ```json
+      {"type": "done", "response_type": "message", "message": "...", "archives": [], "total": 0}
       ```
     
     - `error`: Error occurred
@@ -180,7 +243,8 @@ async def ai_search_stream(request: SearchRequest):
     1. Listen for `query_received` → clear input, show user message
     2. Listen for `searching` → show loading indicator
     3. Listen for `results` → progressively display archives
-    4. Listen for `done` → finalize UI, hide loading
+    4. Listen for `message` → display text response
+    5. Listen for `done` → finalize UI with response_type, hide loading
     """
     try:
         # Get agent
@@ -199,6 +263,7 @@ async def ai_search_stream(request: SearchRequest):
                 
                 # Stream agent results
                 all_archives: List[Dict[str, Any]] = []
+                text_message: Optional[str] = None
                 
                 async for update in agent.search_stream(
                     user_query=request.query,
@@ -207,19 +272,42 @@ async def ai_search_stream(request: SearchRequest):
                     # Forward all events
                     yield f"data: {json.dumps(update)}\\n\\n"
                     
-                    # Track archives for final message
+                    # Track archives and messages
                     if update.get("type") == "done":
                         all_archives = update.get("archives", [])
+                    elif update.get("type") == "message":
+                        text_message = update.get("message")
                 
-                # Send completion with message
+                # Send completion with appropriate response_type
                 final_event = {
                     "type": "complete",
-                    "total": len(all_archives),
                     "query": request.query
                 }
                 
-                if len(all_archives) == 0:
-                    final_event["message"] = "No matching archives found"
+                if text_message:
+                    # Non-search intent
+                    final_event.update({
+                        "response_type": "message",
+                        "message": text_message,
+                        "archives": [],
+                        "total": 0
+                    })
+                elif len(all_archives) > 0:
+                    # Search results
+                    final_event.update({
+                        "response_type": "results",
+                        "archives": all_archives,
+                        "total": len(all_archives),
+                        "message": None
+                    })
+                else:
+                    # No results after retries
+                    final_event.update({
+                        "response_type": "message",
+                        "message": "I couldn't find relevant heritage materials matching your query. Try describing what you're looking for in different words, or browse our collection for inspiration.",
+                        "archives": [],
+                        "total": 0
+                    })
                 
                 yield f"data: {json.dumps(final_event)}\\n\\n"
                 

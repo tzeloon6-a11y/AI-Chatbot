@@ -1,8 +1,8 @@
 """
-Clean AI Search Agent - LangChain 1.0 Best Practices.
+Heritage Archive Search Agent - LangChain 1.0 with Middleware.
 
-This agent returns ONLY structured archive data with NO text responses.
-Following chat UX best practices: immediate feedback, structured output only.
+This agent implements intent classification, query generation, and search refinement
+with automatic retry logic via middleware.
 """
 
 import logging
@@ -14,52 +14,81 @@ from langchain_core.messages import AIMessage
 
 from app.core.config import settings
 from app.services.ai_search.tools import search_archives_db
+from app.services.ai_search.middleware import search_refinement_middleware
 
 logger = logging.getLogger(__name__)
 
 
-# Simplified system prompt - focus on query generation only
-SEARCH_AGENT_PROMPT = """You are a heritage archive search assistant.
+# Updated system prompt with intent classification and refinement logic
+SEARCH_AGENT_PROMPT = """You are a heritage archive search assistant with intent classification.
 
-Your ONLY job is to generate diverse search queries and use the search_archives_db tool.
+WORKFLOW:
+1. CLASSIFY user intent (HERITAGE_SEARCH, UNCLEAR, UNRELATED, GREETING)
+2. If HERITAGE_SEARCH: Generate ONE concise query
+3. Call search_archives_db with the query
+4. If tool returns a refinement request: Generate a DIFFERENT refined query and search again
+5. Return structured results or helpful message
 
-When a user asks for something:
-1. Generate 3-5 diverse query variations covering different aspects
-2. Call search_archives_db with ALL queries at once
-3. The tool returns structured archive data
+INTENT CLASSIFICATION:
+- HERITAGE_SEARCH: User looking for heritage materials (proceed to search)
+  Examples: "batik", "traditional crafts", "wayang kulit videos", "Georgetown architecture"
+  
+- UNCLEAR: Query too vague or ambiguous (ask for clarification)
+  Examples: "show me something", "what do you have?", "stuff", "things"
+  
+- UNRELATED: Not about heritage (politely decline)
+  Examples: "what's the weather?", "how to cook rice?", "tell me a joke", "latest news"
+  
+- GREETING: Conversational/greeting messages (respond warmly, offer to help)
+  Examples: "hello", "hi there", "how are you?", "thanks"
 
-DO NOT:
-- Write explanatory text or responses
-- Describe what you're doing
-- Explain the results
+RESPONSE RULES BY INTENT:
+- HERITAGE_SEARCH → Call search tool and return structured results
+- UNCLEAR → "Could you please provide more details about what heritage materials you're looking for? For example, you could specify a type (batik, crafts, architecture), location, or time period."
+- UNRELATED → "I can only help you search for heritage archive materials such as traditional crafts, cultural artifacts, historical documents, and cultural media. How can I assist you with heritage materials today?"
+- GREETING → "Hello! I'm here to help you search our heritage archive. What cultural materials or historical items would you like to explore?"
 
-ONLY:
-- Generate diverse queries
-- Call the search tool
-- Return the structured results
+QUERY GENERATION (for HERITAGE_SEARCH):
+- Generate ONE focused query that captures core intent
+- Be specific but not overly narrow
+- Include key terms: object type, cultural context, location, time period
+- Examples:
+  * User: "I want batik from Kelantan" → Query: "traditional Kelantan batik textiles"
+  * User: "show me wayang kulit videos" → Query: "wayang kulit shadow puppet performances videos"
+  * User: "old Georgetown photos" → Query: "historical Georgetown heritage architecture photographs"
 
-Examples:
-User: "I want batik"
-You call: search_archives_db(queries=["batik", "batik textile", "traditional Malaysian batik", "batik fabric heritage", "hand-dyed batik patterns"])
+QUERY REFINEMENT (if tool requests it):
+- The middleware will automatically handle retry logic (max 3 attempts)
+- If tool returns a refinement message, analyze why previous queries didn't work
+- Try different terminology, broader/narrower scope, or cultural synonyms
+- DO NOT repeat previous queries
+- Examples:
+  * If "Kelantan batik" failed → Try "Malaysian batik textiles"
+  * If "crafts" too broad → Try "traditional Malaysian handicrafts"
+  * If "shadow puppets" failed → Try "wayang kulit traditional performance"
 
-User: "traditional crafts"
-You call: search_archives_db(queries=["traditional crafts", "heritage handicrafts", "Malaysian artisan work", "cultural craftsmanship", "historical craft techniques"])
+IMPORTANT:
+- Middleware handles retry logic automatically - you just generate refined queries when asked
+- Always call the tool with a SINGLE query string, not a list
+- Return structured archive data for HERITAGE_SEARCH
+- Return text messages for other intents
 """
 
 
 class ArchiveSearchAgentV2:
     """
-    Simplified archive search agent focusing on structured output only.
+    Heritage archive search agent with intent classification and search refinement.
     
-    Key improvements:
-    - No verbose responses - only structured data
-    - Simplified state management
-    - Direct query generation via agent
-    - Clean streaming support
+    Features:
+    - Intent classification (HERITAGE_SEARCH, UNCLEAR, UNRELATED, GREETING)
+    - Single focused query generation
+    - Automatic search refinement via middleware (max 3 attempts)
+    - Structured output for search results
+    - Text responses for non-search intents
     """
     
     def __init__(self):
-        logger.info("Initializing ArchiveSearchAgentV2 (LangChain 1.0)")
+        logger.info("Initializing ArchiveSearchAgentV2 with middleware (LangChain 1.0)")
         
         # Initialize Gemini model
         self.llm = ChatGoogleGenerativeAI(
@@ -68,21 +97,22 @@ class ArchiveSearchAgentV2:
             temperature=0.2,  # Lower for focused query generation
         )
         
-        # Single tool: search_archives_db
+        # Single tool: search_archives_db (now accepts single query string)
         self.tools = [search_archives_db]
         logger.info(f"Configured with {len(self.tools)} tool(s): {[tool.name for tool in self.tools]}")
         
         # Memory for conversation persistence
         self.memory = MemorySaver()
         
-        # Create agent - NO middleware, just pure agent logic
+        # Create agent with search refinement middleware
         self.agent = create_agent(
             model=self.llm,
             tools=self.tools,
             system_prompt=SEARCH_AGENT_PROMPT,
+            middleware=[search_refinement_middleware],  # Automatic retry logic
             checkpointer=self.memory,
         )
-        logger.info("ArchiveSearchAgentV2 initialized")
+        logger.info("ArchiveSearchAgentV2 initialized with SearchRefinementMiddleware")
     
     def search(
         self, 
@@ -90,16 +120,25 @@ class ArchiveSearchAgentV2:
         thread_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Synchronous search returning ONLY structured archive data.
+        Synchronous search returning structured archive data or text message.
         
         Args:
             user_query: User's search query
             thread_id: Optional conversation thread ID
             
         Returns:
+            For HERITAGE_SEARCH intent:
             {
                 "archives": [...],  # Structured archive list
                 "total": int,        # Total count
+                "query": str         # Echo of user query
+            }
+            
+            For non-search intents (UNCLEAR, UNRELATED, GREETING):
+            {
+                "message": str,      # Text response
+                "archives": [],      # Empty
+                "total": 0,          # Zero
                 "query": str         # Echo of user query
             }
         """
@@ -114,6 +153,17 @@ class ArchiveSearchAgentV2:
                 {"messages": [{"role": "user", "content": user_query}]},
                 config=config
             )
+            
+            # Check if agent returned text message (non-search intent)
+            text_message = self._extract_text_message(result)
+            if text_message:
+                logger.info(f"Non-search intent detected: {text_message[:50]}...")
+                return {
+                    "message": text_message,
+                    "archives": [],
+                    "total": 0,
+                    "query": user_query
+                }
             
             # Extract archives from tool artifacts
             archives = self._extract_archives(result)
@@ -136,12 +186,13 @@ class ArchiveSearchAgentV2:
         thread_id: Optional[str] = None
     ) -> AsyncIterator[Dict[str, Any]]:
         """
-        Streaming search with progressive updates.
+        Streaming search with progressive updates and intent detection.
         
         Yields:
-            - {"type": "searching", "query": str}  # Agent is generating queries
+            - {"type": "searching", "query": str}  # Agent is processing
             - {"type": "results", "archives": [...], "total": int}  # Results found
-            - {"type": "done"}  # Completion signal
+            - {"type": "message", "message": str}  # Text response (non-search)
+            - {"type": "done", "archives": [...], "total": int}  # Completion signal
         """
         thread_id = thread_id or "default"
         logger.info(f"Stream search: '{user_query}' (thread={thread_id})")
@@ -156,6 +207,7 @@ class ArchiveSearchAgentV2:
             }
             
             all_archives: List[Dict[str, Any]] = []
+            text_message: Optional[str] = None
             
             # Stream agent execution
             async for event in self.agent.astream(
@@ -163,6 +215,17 @@ class ArchiveSearchAgentV2:
                 config=config,
                 stream_mode="values"
             ):
+                # Check for text message (non-search intent)
+                if not text_message:
+                    msg = self._extract_text_message(event)
+                    if msg:
+                        text_message = msg
+                        yield {
+                            "type": "message",
+                            "message": text_message
+                        }
+                        continue
+                
                 # Extract archives from any tool messages
                 archives = self._extract_archives(event)
                 
@@ -182,7 +245,7 @@ class ArchiveSearchAgentV2:
                 "total": len(all_archives)
             }
             
-            logger.info(f"Stream complete: {len(all_archives)} archives")
+            logger.info(f"Stream complete: {len(all_archives)} archives, text_message={bool(text_message)}")
             
         except Exception as e:
             logger.error(f"Stream error: {e}", exc_info=True)
@@ -190,6 +253,33 @@ class ArchiveSearchAgentV2:
                 "type": "error",
                 "message": str(e)
             }
+    
+    def _extract_text_message(self, result: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract text message from agent response (for non-search intents).
+        
+        Returns text message if agent responded without calling search tool,
+        None otherwise (indicating HERITAGE_SEARCH intent).
+        """
+        messages = result.get("messages", [])
+        
+        # Check if last message is from AI and contains no tool calls
+        if messages:
+            last_msg = messages[-1]
+            if isinstance(last_msg, AIMessage):
+                # If AI message has no tool calls and no tool artifacts in history,
+                # it's a text response (non-search intent)
+                has_tool_calls = hasattr(last_msg, "tool_calls") and last_msg.tool_calls
+                has_tool_artifacts = any(
+                    hasattr(msg, "artifact") and msg.artifact
+                    for msg in messages
+                )
+                
+                if not has_tool_calls and not has_tool_artifacts:
+                    # Pure text response
+                    return last_msg.content
+        
+        return None
     
     def _extract_archives(self, result: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Extract archive data from agent result."""
