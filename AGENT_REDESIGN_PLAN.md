@@ -36,7 +36,17 @@ Redesign the AI search agent to include intent classification, guardrails, relev
   - Updated agent `search_stream()` to emit "message" events
   - Updated OpenAPI schema examples to show both response patterns
   
-- ⬜ **Phase 5: Frontend Update** - NOT STARTED
+- ✅ **Phase 5: Frontend Update** - COMPLETED
+  - Updated `AISearchResponse` interface to include `response_type: 'results' | 'message'` field
+  - Updated `message` field to be `string | null` instead of optional
+  - Updated `AISearchStreamUpdate` interface to include 'message' event type
+  - Updated `ChatPanelV2.tsx` `handleSend()` to check `response_type` and handle both patterns:
+    * Pattern A: `response_type="results"` → Display search results in archiveResults
+    * Pattern B: `response_type="message"` → Display text message in content
+  - Updated `QuickSearchButtons` handler similarly to support both patterns
+  - Streaming SSE handler already supports 'message' events (no changes needed)
+  - Added appropriate toast notifications for both response types
+  
 - ⬜ **Phase 6: Testing & Rollout** - NOT STARTED
 
 ---

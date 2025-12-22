@@ -41,14 +41,15 @@ export interface AISearchRequest {
 }
 
 export interface AISearchResponse {
-  archives: ArchiveResponse[];
+  response_type: 'results' | 'message';  // Type of response
+  archives: ArchiveResponse[];  // Empty array if response_type='message'
   total: number;
   query: string;
-  message?: string;  // Only present when no results found
+  message: string | null;  // Text message for non-search intents, null for results
 }
 
 export interface AISearchStreamUpdate {
-  type: 'query_received' | 'searching' | 'results' | 'done' | 'complete' | 'error';
+  type: 'query_received' | 'searching' | 'results' | 'message' | 'done' | 'complete' | 'error';
   query?: string;
   timestamp?: string;
   thread_id?: string;
@@ -56,6 +57,7 @@ export interface AISearchStreamUpdate {
   archives?: ArchiveResponse[];
   total?: number;
   message?: string;
+  response_type?: 'results' | 'message';  // In 'complete' event
 }
 
 /**

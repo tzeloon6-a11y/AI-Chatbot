@@ -120,41 +120,54 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
       // Call backend API
       const result = await aiSearchArchives(queryText);
       
-      // Convert to ArchiveItem format
-      const searchResults: ArchiveItem[] = result.archives.map((archive: ArchiveResponse) => {
-        // Normalize file URIs to extract proper URLs from Supabase objects
-        const normalizedUris = (archive.file_uris || archive.storage_paths || []).map(normalizeFileUri).filter((uri): uri is string => !!uri);
-        const fileUrl = normalizedUris[0] || 'https://via.placeholder.com/400';
-        
-        return {
-          id: archive.id,
-          title: archive.title,
-          description: archive.description || '',
-          type: archive.media_types[0] || 'image',
-          date: archive.dates?.[0] || archive.created_at,
-          tags: archive.tags || [],
-          fileUrl: fileUrl,
-          thumbnail: fileUrl,
-          file_uris: normalizedUris,
+      // Check response type
+      if (result.response_type === 'message') {
+        // Non-search intent (UNCLEAR, UNRELATED, GREETING)
+        const aiMessage: ChatMessageType = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: result.message || 'I can help you search our heritage archive.',
+          timestamp: new Date(),
         };
-      });
-
-      // Create assistant message with results
-      const aiMessage: ChatMessageType = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: result.message || '',  // Will be empty for results, "No matching archives found" for no results
-        timestamp: new Date(),
-        archiveResults: searchResults.length > 0 ? searchResults : undefined,
-      };
-      
-      setMessages((prev) => [...prev, aiMessage]);
-      
-      // User feedback
-      if (searchResults.length > 0) {
-        toast.success(`Found ${searchResults.length} matching archive(s)`);
+        setMessages((prev) => [...prev, aiMessage]);
       } else {
-        toast.info('No matching archives found. Try different keywords.');
+        // Search results (HERITAGE_SEARCH)
+        // Convert to ArchiveItem format
+        const searchResults: ArchiveItem[] = result.archives.map((archive: ArchiveResponse) => {
+          // Normalize file URIs to extract proper URLs from Supabase objects
+          const normalizedUris = (archive.file_uris || archive.storage_paths || []).map(normalizeFileUri).filter((uri): uri is string => !!uri);
+          const fileUrl = normalizedUris[0] || 'https://via.placeholder.com/400';
+          
+          return {
+            id: archive.id,
+            title: archive.title,
+            description: archive.description || '',
+            type: archive.media_types[0] || 'image',
+            date: archive.dates?.[0] || archive.created_at,
+            tags: archive.tags || [],
+            fileUrl: fileUrl,
+            thumbnail: fileUrl,
+            file_uris: normalizedUris,
+          };
+        });
+
+        // Create assistant message with results
+        const aiMessage: ChatMessageType = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: result.message || '',  // Display message if no results
+          timestamp: new Date(),
+          archiveResults: searchResults.length > 0 ? searchResults : undefined,
+        };
+        
+        setMessages((prev) => [...prev, aiMessage]);
+        
+        // User feedback
+        if (searchResults.length > 0) {
+          toast.success(`Found ${searchResults.length} matching archive(s)`);
+        } else {
+          toast.info(result.message || 'No matching archives found. Try different keywords.');
+        }
       }
     } catch (error) {
       const errorMessage: ChatMessageType = {
@@ -303,38 +316,51 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
           try {
             const result = await aiSearchArchives(query);
             
-            const searchResults: ArchiveItem[] = result.archives.map((archive: ArchiveResponse) => {
-              // Normalize file URIs to extract proper URLs from Supabase objects
-              const normalizedUris = (archive.file_uris || archive.storage_paths || []).map(normalizeFileUri).filter((uri): uri is string => !!uri);
-              const fileUrl = normalizedUris[0] || 'https://via.placeholder.com/400';
-              
-              return {
-                id: archive.id,
-                title: archive.title,
-                description: archive.description || '',
-                type: archive.media_types[0] || 'image',
-                date: archive.dates?.[0] || archive.created_at,
-                tags: archive.tags || [],
-                fileUrl: fileUrl,
-                thumbnail: fileUrl,
-                file_uris: normalizedUris,
+            // Check response type
+            if (result.response_type === 'message') {
+              // Non-search intent
+              const aiMessage: ChatMessageType = {
+                id: (Date.now() + 1).toString(),
+                role: 'assistant',
+                content: result.message || 'I can help you search our heritage archive.',
+                timestamp: new Date(),
               };
-            });
-
-            const aiMessage: ChatMessageType = {
-              id: (Date.now() + 1).toString(),
-              role: 'assistant',
-              content: result.message || '',
-              timestamp: new Date(),
-              archiveResults: searchResults.length > 0 ? searchResults : undefined,
-            };
-            
-            setMessages((prev) => [...prev, aiMessage]);
-            
-            if (searchResults.length > 0) {
-              toast.success(`Found ${searchResults.length} matching archive(s)`);
+              setMessages((prev) => [...prev, aiMessage]);
             } else {
-              toast.info('No matching archives found. Try different keywords.');
+              // Search results
+              const searchResults: ArchiveItem[] = result.archives.map((archive: ArchiveResponse) => {
+                // Normalize file URIs to extract proper URLs from Supabase objects
+                const normalizedUris = (archive.file_uris || archive.storage_paths || []).map(normalizeFileUri).filter((uri): uri is string => !!uri);
+                const fileUrl = normalizedUris[0] || 'https://via.placeholder.com/400';
+                
+                return {
+                  id: archive.id,
+                  title: archive.title,
+                  description: archive.description || '',
+                  type: archive.media_types[0] || 'image',
+                  date: archive.dates?.[0] || archive.created_at,
+                  tags: archive.tags || [],
+                  fileUrl: fileUrl,
+                  thumbnail: fileUrl,
+                  file_uris: normalizedUris,
+                };
+              });
+
+              const aiMessage: ChatMessageType = {
+                id: (Date.now() + 1).toString(),
+                role: 'assistant',
+                content: result.message || '',
+                timestamp: new Date(),
+                archiveResults: searchResults.length > 0 ? searchResults : undefined,
+              };
+              
+              setMessages((prev) => [...prev, aiMessage]);
+              
+              if (searchResults.length > 0) {
+                toast.success(`Found ${searchResults.length} matching archive(s)`);
+              } else {
+                toast.info(result.message || 'No matching archives found. Try different keywords.');
+              }
             }
           } catch (error) {
             const errorMessage: ChatMessageType = {

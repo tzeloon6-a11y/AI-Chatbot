@@ -13,20 +13,20 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import AIMessage
 
 from app.core.config import settings
-from app.services.ai_search.tools import search_archives_db
+from app.services.ai_search.tools import search_archives_db, read_archives_data
 from app.services.ai_search.middleware import search_refinement_middleware
 
 logger = logging.getLogger(__name__)
 
 
 # Updated system prompt with intent classification and refinement logic
-SEARCH_AGENT_PROMPT = """You are a heritage archive search assistant with intent classification.
+SEARCH_AGENT_PROMPT = """You are a heritage archive search assistant with intent classification and database access.
 
 WORKFLOW:
 1. CLASSIFY user intent (HERITAGE_SEARCH, UNCLEAR, UNRELATED, GREETING)
-2. If HERITAGE_SEARCH: Generate ONE concise query
-3. Call search_archives_db with the query
-4. If tool returns a refinement request: Generate a DIFFERENT refined query and search again
+2. If HERITAGE_SEARCH: Choose the appropriate tool based on query type
+3. Call the selected tool with appropriate parameters
+4. If tool returns a refinement request: Try a different approach or query
 5. Return structured results or helpful message
 
 INTENT CLASSIFICATION:
@@ -57,6 +57,14 @@ QUERY GENERATION (for HERITAGE_SEARCH):
   * User: "show me wayang kulit videos" → Query: "wayang kulit shadow puppet performances videos"
   * User: "old Georgetown photos" → Query: "historical Georgetown heritage architecture photographs"
 
+AVAILABLE TOOLS:
+1. search_archives_db - Use for semantic vector search when user describes what they're looking for
+2. read_archives_data - Use for browsing or filtering by specific metadata (tags, media types, dates)
+   Examples of when to use read_archives_data:
+   - "Show me all video archives" → read_archives_data(filter_by="media_type", filter_value="video")
+   - "List archives with batik tag" → read_archives_data(filter_by="tag", filter_value="batik")
+   - "What archives were created recently?" → read_archives_data(order_by="created_at", limit=10)
+
 QUERY REFINEMENT (if tool requests it):
 - The middleware will automatically handle retry logic (max 3 attempts)
 - If tool returns a refinement message, analyze why previous queries didn't work
@@ -85,6 +93,10 @@ class ArchiveSearchAgentV2:
     - Automatic search refinement via middleware (max 3 attempts)
     - Structured output for search results
     - Text responses for non-search intents
+    
+    Available Tools:
+    1. search_archives_db: Semantic vector search for finding similar archives
+    2. read_archives_data: Read-only metadata filtering and browsing (no write operations)
     """
     
     def __init__(self):
@@ -97,8 +109,8 @@ class ArchiveSearchAgentV2:
             temperature=0.2,  # Lower for focused query generation
         )
         
-        # Single tool: search_archives_db (now accepts single query string)
-        self.tools = [search_archives_db]
+        # Tools: search_archives_db (vector search) + read_archives_data (metadata filtering)
+        self.tools = [search_archives_db, read_archives_data]
         logger.info(f"Configured with {len(self.tools)} tool(s): {[tool.name for tool in self.tools]}")
         
         # Memory for conversation persistence
