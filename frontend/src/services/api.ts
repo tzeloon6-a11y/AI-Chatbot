@@ -36,6 +36,12 @@ export interface UpdateArchiveRequest {
   dates?: string[];
 }
 
+export interface MetadataSuggestions {
+  title: string;
+  tags: string[];
+  description: string;
+}
+
 export interface AISearchRequest {
   query: string;
 }
@@ -58,6 +64,45 @@ export interface AISearchStreamUpdate {
   total?: number;
   message?: string;
   response_type?: 'results' | 'message';  // In 'complete' event
+}
+
+/**
+ * Generate metadata suggestions from uploaded files
+ */
+export async function generateMetadata(
+  files: File[],
+  mediaTypes: ('image' | 'video' | 'audio' | 'document')[]
+): Promise<MetadataSuggestions> {
+  try {
+    const formData = new FormData();
+
+    // Append files
+    files.forEach((file) => {
+      formData.append('files', file);
+    });
+
+    // Append media types
+    formData.append('media_types', mediaTypes.join(','));
+
+    const response = await fetch(`${API_BASE_URL}/archives/generate-metadata`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(
+        errorData.detail || `Failed to generate metadata: ${response.statusText}`
+      );
+    }
+
+    return await response.json();
+  } catch (error) {
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error('Unknown error occurred while generating metadata');
+  }
 }
 
 /**

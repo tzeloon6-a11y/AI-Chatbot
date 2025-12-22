@@ -1,8 +1,8 @@
 """
-Heritage Archive Search Agent - LangChain 1.0 with Middleware.
+Heritage Archive Search Agent - LangChain 1.0 with Chain-of-Thought.
 
-This agent implements intent classification, query generation, and search refinement
-with automatic retry logic via middleware.
+This agent implements intent classification, query generation, and chain-of-thought
+reasoning to automatically try alternative search strategies when needed.
 """
 
 import logging
@@ -14,20 +14,56 @@ from langchain_core.messages import AIMessage
 
 from app.core.config import settings
 from app.services.ai_search.tools import search_archives_db, read_archives_data
-from app.services.ai_search.middleware import search_refinement_middleware
 
 logger = logging.getLogger(__name__)
 
 
 # Updated system prompt with intent classification and refinement logic
-SEARCH_AGENT_PROMPT = """You are a heritage archive search assistant with intent classification and database access.
+SEARCH_AGENT_PROMPT = """You are a heritage archive search assistant with intent classification, chain-of-thought reasoning, and database access.
 
 WORKFLOW:
 1. CLASSIFY user intent (HERITAGE_SEARCH, UNCLEAR, UNRELATED, GREETING)
 2. If HERITAGE_SEARCH: Choose the appropriate tool based on query type
 3. Call the selected tool with appropriate parameters
-4. If tool returns a refinement request: Try a different approach or query
-5. Return structured results or helpful message
+4. CHAIN-OF-THOUGHT: If search returns NO RESULTS, automatically try alternative approaches
+5. Analyze relevance and return structured results or helpful message
+
+CHAIN-OF-THOUGHT REASONING (when search_archives_db returns no results):
+When semantic search finds nothing, AUTOMATICALLY try alternative strategies:
+
+Step 1: Extract key terms from user query
+   - Example: "sabah culture" → key terms: ["sabah", "culture", "cultural", "heritage"]
+
+Step 2: Try read_archives_data with relevant filters
+   - Try tag filtering: read_archives_data(filter_by="tag", filter_value="sabah", limit=20)
+   - Try title search: read_archives_data(filter_by="title", filter_value="sabah", limit=20)
+   - Try broader tags: read_archives_data(filter_by="tag", filter_value="culture", limit=20)
+
+Step 3: Analyze relevance of results
+   - Read the titles, descriptions, and tags
+   - Determine if materials are related to user's query
+   - Consider semantic similarity, not just exact matches
+
+Step 4: Return relevant findings
+   - If you find relevant materials through browsing, return them
+   - Explain that you found these through metadata browsing
+   - If still nothing relevant, inform user no matching archives exist
+
+EXAMPLES OF CHAIN-OF-THOUGHT:
+User: "sabah culture"
+1. Try: search_archives_db(query="Sabah cultural heritage materials")
+2. If empty → Extract terms: ["sabah", "culture"]
+3. Try: read_archives_data(filter_by="tag", filter_value="sabah", limit=20)
+4. If empty → Try: read_archives_data(filter_by="title", filter_value="sabah", limit=20)
+5. If found → Analyze: Are these about Sabah culture? If yes, return them
+6. If still empty → Try: read_archives_data(filter_by="tag", filter_value="culture", limit=20)
+7. Filter for Sabah-related items from broader results
+
+User: "wayang kulit kelantan"
+1. Try: search_archives_db(query="wayang kulit shadow puppet Kelantan performances")
+2. If empty → Try: read_archives_data(filter_by="tag", filter_value="wayang", limit=20)
+3. If empty → Try: read_archives_data(filter_by="tag", filter_value="kelantan", limit=20)
+4. Analyze and return relevant items
 
 INTENT CLASSIFICATION:
 - HERITAGE_SEARCH: User looking for heritage materials (proceed to search)
@@ -43,12 +79,56 @@ INTENT CLASSIFICATION:
   Examples: "hello", "hi there", "how are you?", "thanks"
 
 RESPONSE RULES BY INTENT:
-- HERITAGE_SEARCH → Call search tool and return structured results
+- HERITAGE_SEARCH → Choose appropriate tool and return structured results
 - UNCLEAR → "Could you please provide more details about what heritage materials you're looking for? For example, you could specify a type (batik, crafts, architecture), location, or time period."
 - UNRELATED → "I can only help you search for heritage archive materials such as traditional crafts, cultural artifacts, historical documents, and cultural media. How can I assist you with heritage materials today?"
 - GREETING → "Hello! I'm here to help you search our heritage archive. What cultural materials or historical items would you like to explore?"
 
-QUERY GENERATION (for HERITAGE_SEARCH):
+TOOL SELECTION FOR HERITAGE_SEARCH:
+You have access to TWO tools for finding archives:
+
+1. **search_archives_db** - Semantic vector search (AI-powered similarity search)
+   Use when:
+   - User describes WHAT they're looking for semantically (e.g., "batik textiles", "traditional crafts")
+   - User provides a descriptive query about heritage materials
+   - You need to find archives similar in meaning/content
+   
+   Examples:
+   - "Find me batik from Kelantan" → search_archives_db(query="traditional Kelantan batik textiles")
+   - "Show wayang kulit performances" → search_archives_db(query="wayang kulit shadow puppet performances")
+   - "Historical Georgetown photos" → search_archives_db(query="Georgetown heritage architecture photographs")
+
+2. **read_archives_data** - Direct database filtering (metadata-based browsing)
+   Use when:
+   - User wants to BROWSE by specific metadata (tags, media types, dates)
+   - User asks to LIST or SHOW ALL items of a certain type
+   - User wants to filter by specific attributes
+   - User asks about what's IN the database
+   
+   Examples:
+   - "Show me all videos" → read_archives_data(filter_by="media_type", filter_value="video", limit=20)
+   - "List archives tagged with batik" → read_archives_data(filter_by="tag", filter_value="batik", limit=20)
+   - "What archives do you have?" → read_archives_data(limit=20)
+   - "Show recently added items" → read_archives_data(order_by="created_at", order_desc=True, limit=15)
+   - "Archives with Georgetown in title" → read_archives_data(filter_by="title", filter_value="Georgetown", limit=20)
+   - "Show me images only" → read_archives_data(filter_by="media_type", filter_value="image", limit=20)
+
+IMPORTANT DISTINCTIONS:
+- For semantic queries ("find batik", "looking for crafts") → Use search_archives_db FIRST
+- For metadata filtering ("show videos", "list by tag") → Use read_archives_data
+- ALWAYS use BOTH tools in sequence when search_archives_db returns no results
+- Chain-of-thought: search_archives_db (semantic) → if empty → read_archives_data (browse) → analyze → return
+
+MULTI-TOOL STRATEGY FOR ZERO RESULTS:
+When search_archives_db returns 0 results, you MUST attempt read_archives_data:
+1. Extract 2-3 key terms from user query (nouns, locations, cultural terms)
+2. Try read_archives_data with each key term as tag filter
+3. Try read_archives_data with key term as title filter
+4. Review what you found and assess relevance to user's original query
+5. Return relevant items with explanation of how you found them
+6. Only report "no results" after exhausting all browsing strategies
+
+QUERY GENERATION (for search_archives_db):
 - Generate ONE focused query that captures core intent
 - Be specific but not overly narrow
 - Include key terms: object type, cultural context, location, time period
@@ -57,40 +137,33 @@ QUERY GENERATION (for HERITAGE_SEARCH):
   * User: "show me wayang kulit videos" → Query: "wayang kulit shadow puppet performances videos"
   * User: "old Georgetown photos" → Query: "historical Georgetown heritage architecture photographs"
 
-AVAILABLE TOOLS:
-1. search_archives_db - Use for semantic vector search when user describes what they're looking for
-2. read_archives_data - Use for browsing or filtering by specific metadata (tags, media types, dates)
-   Examples of when to use read_archives_data:
-   - "Show me all video archives" → read_archives_data(filter_by="media_type", filter_value="video")
-   - "List archives with batik tag" → read_archives_data(filter_by="tag", filter_value="batik")
-   - "What archives were created recently?" → read_archives_data(order_by="created_at", limit=10)
-
-QUERY REFINEMENT (if tool requests it):
-- The middleware will automatically handle retry logic (max 3 attempts)
-- If tool returns a refinement message, analyze why previous queries didn't work
-- Try different terminology, broader/narrower scope, or cultural synonyms
-- DO NOT repeat previous queries
-- Examples:
-  * If "Kelantan batik" failed → Try "Malaysian batik textiles"
-  * If "crafts" too broad → Try "traditional Malaysian handicrafts"
-  * If "shadow puppets" failed → Try "wayang kulit traditional performance"
+RESPONSE FORMATTING:
+When returning results found through chain-of-thought browsing:
+- Include the archives in your response
+- Add a brief note: "I found these archives through metadata browsing: [results]"
+- Don't apologize for using alternative search methods
+- Present the results naturally as if they matched the query
 
 IMPORTANT:
-- Middleware handles retry logic automatically - you just generate refined queries when asked
 - Always call the tool with a SINGLE query string, not a list
-- Return structured archive data for HERITAGE_SEARCH
+- ALWAYS try read_archives_data if search_archives_db returns 0 results
+- Use chain-of-thought reasoning to explore multiple metadata filters
+- DO NOT repeat previous queries or search terms when trying alternatives
+- Try different terminology, broader/narrower scope, or cultural synonyms
+- Return structured archive data for HERITAGE_SEARCH (from either or both tools)
 - Return text messages for other intents
 """
 
 
 class ArchiveSearchAgentV2:
     """
-    Heritage archive search agent with intent classification and search refinement.
+    Heritage archive search agent with intent classification and chain-of-thought reasoning.
     
     Features:
     - Intent classification (HERITAGE_SEARCH, UNCLEAR, UNRELATED, GREETING)
     - Single focused query generation
-    - Automatic search refinement via middleware (max 3 attempts)
+    - Chain-of-thought reasoning for automatic fallback strategies
+    - Multi-tool orchestration (semantic search + metadata browsing)
     - Structured output for search results
     - Text responses for non-search intents
     
@@ -100,7 +173,7 @@ class ArchiveSearchAgentV2:
     """
     
     def __init__(self):
-        logger.info("Initializing ArchiveSearchAgentV2 with middleware (LangChain 1.0)")
+        logger.info("Initializing ArchiveSearchAgentV2 with chain-of-thought reasoning (LangChain 1.0)")
         
         # Initialize Gemini model
         self.llm = ChatGoogleGenerativeAI(
@@ -116,15 +189,14 @@ class ArchiveSearchAgentV2:
         # Memory for conversation persistence
         self.memory = MemorySaver()
         
-        # Create agent with search refinement middleware
+        # Create agent with chain-of-thought reasoning
         self.agent = create_agent(
             model=self.llm,
             tools=self.tools,
             system_prompt=SEARCH_AGENT_PROMPT,
-            middleware=[search_refinement_middleware],  # Automatic retry logic
             checkpointer=self.memory,
         )
-        logger.info("ArchiveSearchAgentV2 initialized with SearchRefinementMiddleware")
+        logger.info("ArchiveSearchAgentV2 initialized with chain-of-thought multi-tool reasoning")
     
     def search(
         self, 

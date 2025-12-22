@@ -514,6 +514,125 @@ Begin your analysis now. Remember: MAXIMUM 800 WORDS."""
             for temp_path in temp_file_paths:
                 self._cleanup_temp_file(temp_path)
     
+    async def generate_metadata_suggestions(
+        self,
+        uploaded_files: List,
+        media_types: List[str]
+    ) -> dict:
+        """
+        Generate metadata suggestions (title, tags, description) from uploaded content.
+        
+        Args:
+            uploaded_files: List of uploaded file objects from Google GenAI
+            media_types: List of media types
+            
+        Returns:
+            Dictionary with 'title', 'tags', and 'description'
+            
+        Raises:
+            HTTPException: If generation fails
+        """
+        try:
+            # Build prompt for metadata generation
+            media_types_str = ", ".join(media_types)
+            
+            prompt = f"""# Role and Context
+
+You are a Malaysian cultural heritage expert analyzing materials for an archiving system. You need to generate metadata (title, tags, and description) based on the uploaded content.
+
+**Media Types**: {media_types_str}
+
+---
+
+# Your Task
+
+Analyze the uploaded materials and generate:
+1. **Title**: A concise, descriptive title (5-10 words maximum)
+2. **Tags**: 5-10 relevant keywords/tags for categorization
+3. **Description**: A brief description (2-3 sentences, 50-100 words)
+
+Focus on:
+- Malaysian cultural heritage context
+- Geographic locations (states, cities, regions)
+- Cultural elements (ethnic groups, traditions, practices)
+- Visual/content characteristics
+- Time period (if evident)
+- Materials/techniques (if applicable)
+
+---
+
+# Output Format
+
+Provide your response in the following JSON format ONLY (no additional text):
+
+{{
+  "title": "Concise descriptive title here",
+  "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"],
+  "description": "Brief 2-3 sentence description here."
+}}
+
+**CRITICAL**: Return ONLY valid JSON. No markdown code blocks, no explanations, no extra text.
+
+Begin your analysis now."""
+            
+            # Build content parts
+            contents = [prompt]
+            for uploaded_file in uploaded_files:
+                contents.append(uploaded_file)
+            
+            # Generate metadata (run in executor to avoid blocking)
+            loop = asyncio.get_event_loop()
+            
+            def generate_content():
+                return self.client.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                        max_output_tokens=1024,
+                        top_p=0.95,
+                        top_k=40,
+                        response_mime_type="application/json",
+                    )
+                )
+            
+            response = await loop.run_in_executor(
+                self._executor,
+                generate_content
+            )
+            
+            if not response.text:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to generate metadata. Empty response from model."
+                )
+            
+            # Parse JSON response
+            try:
+                metadata = json.loads(response.text)
+                # Validate structure
+                if not all(key in metadata for key in ["title", "tags", "description"]):
+                    raise ValueError("Missing required fields in metadata")
+                return metadata
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"Error parsing metadata JSON: {e}")
+                print(f"Response text: {response.text}")
+                # Return fallback metadata
+                return {
+                    "title": "Uploaded Heritage Material",
+                    "tags": ["heritage", "malaysian culture"],
+                    "description": "Heritage material uploaded for archival purposes."
+                }
+            
+        except Exception as e:
+            print(f"Error generating metadata: {str(e)}")
+            # Return fallback metadata instead of raising exception
+            return {
+                "title": "Uploaded Heritage Material",
+                "tags": ["heritage", "malaysian culture"],
+                "description": "Heritage material uploaded for archival purposes."
+            }
+    
     async def analyze_content(
         self,
         uploaded_files: List,
@@ -646,7 +765,6 @@ Begin your analysis now. Remember: MAXIMUM 800 WORDS."""
         tags: List[str],
         dates: List[datetime],
         storage_paths: List[str],
-        genai_file_ids: List[str],
     ) -> dict:
         payload = {
             "title": title,
@@ -657,7 +775,6 @@ Begin your analysis now. Remember: MAXIMUM 800 WORDS."""
             "tags": tags if tags else [],
             "dates": [dt.isoformat() for dt in dates] if dates else [],
             "storage_paths": storage_paths,
-            "genai_file_ids": genai_file_ids if genai_file_ids else [],
         }
 
         loop = asyncio.get_event_loop()
@@ -704,7 +821,7 @@ Begin your analysis now. Remember: MAXIMUM 800 WORDS."""
     ) -> ArchiveResponse:
         """Complete archive processing pipeline."""
 
-        uploaded_files, storage_paths, genai_file_ids = await self.upload_files_to_genai(files)
+        uploaded_files, storage_paths, _ = await self.upload_files_to_genai(files)
         file_uris = [file_obj.uri for file_obj in uploaded_files]
 
         summary = await self.analyze_content(
@@ -726,12 +843,10 @@ Begin your analysis now. Remember: MAXIMUM 800 WORDS."""
             tags=tags,
             dates=dates or [],
             storage_paths=storage_paths,
-            genai_file_ids=genai_file_ids,
         )
 
         archive_record["file_uris"] = file_uris
         archive_record.setdefault("storage_paths", storage_paths)
-        archive_record.setdefault("genai_file_ids", genai_file_ids)
 
         return ArchiveResponse(**archive_record)
 

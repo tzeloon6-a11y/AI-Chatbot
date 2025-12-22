@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { Upload, X, Loader2 } from 'lucide-react';
+import { Upload, X, Loader2, Sparkles } from 'lucide-react';
 import { Modal, ModalHeader, ModalBody, ModalFooter, ModalTitle } from './ui/modal';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -8,7 +8,7 @@ import { Label } from './ui/label';
 import { Progress } from './ui/progress';
 import type { ArchiveItem } from '../App';
 import { toast } from 'sonner';
-import { createArchive } from '../services/api';
+import { createArchive, generateMetadata } from '../services/api';
 
 type AddArchiveModalProps = {
   isOpen: boolean;
@@ -27,17 +27,61 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [isGeneratingMetadata, setIsGeneratingMetadata] = useState(false);
+  const [metadataGenerated, setMetadataGenerated] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleGenerateMetadata = async (files: File[]) => {
+    if (files.length === 0) {
+      return;
+    }
+
+    setIsGeneratingMetadata(true);
+
+    try {
+      // Determine media types from files
+      const mediaTypes = determineMediaTypes(files);
+
+      // Call API to generate metadata
+      const metadata = await generateMetadata(files, mediaTypes);
+
+      // Update form data with generated metadata
+      setFormData(prev => ({
+        ...prev,
+        title: metadata.title,
+        tags: metadata.tags.join(', '),
+        description: metadata.description,
+      }));
+
+      setMetadataGenerated(true);
+      toast.success('AI has auto-filled title, tags, and description. You can edit them if needed.');
+    } catch (error) {
+      console.error('Error generating metadata:', error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Failed to generate metadata suggestions.'
+      );
+    } finally {
+      setIsGeneratingMetadata(false);
+    }
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const filesArray = Array.from(e.target.files);
       setSelectedFiles(filesArray);
+      setMetadataGenerated(false);
+      
+      // Automatically generate metadata
+      await handleGenerateMetadata(filesArray);
     }
   };
 
   const removeFile = (index: number) => {
     setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+    // Reset metadata generated flag when files change
+    setMetadataGenerated(false);
   };
 
   const getFileType = (file: File): ArchiveItem['type'] => {
@@ -150,6 +194,7 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
       });
       setSelectedFiles([]);
       setUploadProgress(0);
+      setMetadataGenerated(false);
       onClose();
     } catch (error) {
       console.error('Error creating archive:', error);
@@ -239,6 +284,21 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
               )}
             </div>
             
+            {isGeneratingMetadata && (
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-stone-600 flex items-center">
+                    <Sparkles className="w-4 h-4 mr-2 text-forest" />
+                    Generating metadata suggestions...
+                  </span>
+                </div>
+                <Progress value={50} className="mt-2" />
+                <p className="text-xs text-stone-500">
+                  AI is analyzing your files to suggest title, tags, and description.
+                </p>
+              </div>
+            )}
+            
             {isUploading && (
               <div className="mt-4 space-y-2">
                 <div className="flex items-center justify-between text-sm">
@@ -255,13 +315,22 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
 
           {/* Title */}
           <div>
-            <Label htmlFor="title">Title *</Label>
+            <Label htmlFor="title" className="flex items-center gap-2">
+              Title *
+              {metadataGenerated && (
+                <span className="text-xs text-forest font-normal flex items-center">
+                  <Sparkles className="w-3 h-3 mr-1" />
+                  AI-generated
+                </span>
+              )}
+            </Label>
             <Input
               id="title"
               value={formData.title}
               onChange={(e) => setFormData({ ...formData, title: e.target.value })}
               placeholder="e.g., Traditional Batik Pattern"
               required
+              disabled={isGeneratingMetadata}
             />
           </div>
 
@@ -281,24 +350,42 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
 
           {/* Tags */}
           <div>
-            <Label htmlFor="tags">Tags</Label>
+            <Label htmlFor="tags" className="flex items-center gap-2">
+              Tags
+              {metadataGenerated && (
+                <span className="text-xs text-forest font-normal flex items-center">
+                  <Sparkles className="w-3 h-3 mr-1" />
+                  AI-generated
+                </span>
+              )}
+            </Label>
             <Input
               id="tags"
               value={formData.tags}
               onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
               placeholder="batik, heritage, traditional (comma separated)"
+              disabled={isGeneratingMetadata}
             />
           </div>
 
           {/* Description */}
           <div>
-            <Label htmlFor="description">Description</Label>
+            <Label htmlFor="description" className="flex items-center gap-2">
+              Description
+              {metadataGenerated && (
+                <span className="text-xs text-forest font-normal flex items-center">
+                  <Sparkles className="w-3 h-3 mr-1" />
+                  AI-generated
+                </span>
+              )}
+            </Label>
             <Textarea
               id="description"
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               placeholder="Describe the archive item..."
               rows={4}
+              disabled={isGeneratingMetadata}
             />
           </div>
         </form>

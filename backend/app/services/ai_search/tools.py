@@ -149,7 +149,7 @@ def search_archives_db(
                 f"   Tags: {', '.join(archive.get('tags', []) or [])}\n"
                 f"   Media Types: {', '.join(archive.get('media_types', []))}\n"
                 f"   Dates: {dates_str}\n"
-                f"   Number of Files: {len(archive.get('genai_file_ids', []) or [])}\n"
+                f"   Number of Files: {len(archive.get('storage_paths', []) or [])}\n"
                 f"   Similarity Score: {similarity:.2f}"
             )
         
@@ -231,7 +231,7 @@ def read_archives_data(
         # Build the query - always select all fields except embedding (too large)
         query = supabase.table("archives").select(
             "id, title, description, media_types, tags, dates, "
-            "created_at, updated_at, storage_paths, genai_file_ids"
+            "created_at, updated_at, storage_paths"
         )
         
         # Apply filters if specified

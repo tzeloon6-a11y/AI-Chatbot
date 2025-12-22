@@ -42,7 +42,6 @@ class ArchiveResult(BaseModel):
     tags: List[str] | None = None
     file_uris: List[str] | None = None
     storage_paths: List[str] | None = None
-    genai_file_ids: List[str] | None = None
     created_at: str
     updated_at: str | None = None
     similarity: float | None = None

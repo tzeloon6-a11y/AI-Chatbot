@@ -29,9 +29,6 @@ class ArchiveResponse(BaseModel):
     # summary is hidden from users - stored in DB but not exposed in API
     file_uris: List[str] = Field(..., description="URIs of uploaded files in Google GenAI")
     storage_paths: List[str] = Field(..., description="Supabase storage paths for uploaded materials")
-    genai_file_ids: Optional[List[str]] = Field(
-        None, description="Identifiers of files uploaded to Google GenAI"
-    )
     created_at: datetime = Field(..., description="Creation timestamp")
     
     class Config:

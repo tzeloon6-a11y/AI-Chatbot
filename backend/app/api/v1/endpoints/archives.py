@@ -79,6 +79,63 @@ async def get_archives():
     
 
 
+@router.post("/archives/generate-metadata")
+async def generate_metadata(
+    files: List[UploadFile] = File(..., description="Files to analyze for metadata generation"),
+    media_types: str = Form(..., description="Comma-separated list of media types (image,video,audio,document)"),
+    archive_service: ArchiveService = Depends(get_archive_service)
+):
+    """
+    Generate metadata suggestions (title, tags, description) from uploaded files.
+    This is called before the actual archive creation to provide AI-generated suggestions.
+    
+    Returns:
+        Dictionary with suggested title, tags, and description
+    """
+    try:
+        # Parse media types
+        media_type_list = [MediaType(mt.strip().lower()) for mt in media_types.split(",") if mt.strip()]
+        if not media_type_list:
+            raise HTTPException(status_code=400, detail="At least one media type must be provided")
+        
+        # Validate files
+        if not files or len(files) == 0:
+            raise HTTPException(status_code=400, detail="At least one file must be uploaded")
+        
+        # Convert media types to strings for service
+        media_types_str = [mt.value for mt in media_type_list]
+        
+        # Upload files to GenAI
+        uploaded_files, storage_paths, _ = await archive_service.upload_files_to_genai(files)
+        
+        # Generate metadata suggestions
+        metadata = await archive_service.generate_metadata_suggestions(
+            uploaded_files=uploaded_files,
+            media_types=media_types_str
+        )
+        
+        # Clean up uploaded files from GenAI and storage (since this is just for suggestions)
+        # Delete from Supabase storage
+        supabase = get_supabase_client()
+        for storage_path in storage_paths:
+            try:
+                supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).remove([storage_path])
+            except Exception as e:
+                print(f"Error cleaning up storage path {storage_path}: {e}")
+        
+        return metadata
+        
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate metadata: {str(e)}"
+        )
+
+
 @router.post("/archives", response_model=ArchiveResponse, status_code=201)
 async def create_archive(
     files: List[UploadFile] = File(..., description="Files to upload (images, videos, audio, documents)"),
