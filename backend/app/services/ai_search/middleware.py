@@ -1,476 +1,217 @@
-"""LEGACY: Middleware for AI Search Agent - NOT CURRENTLY USED.
+"""
+Custom middleware for search refinement with retry logic.
 
-This file contains middleware implementations that were used with the old agent.py.
-The new agent_v2.py uses a simpler approach without middleware.
-
-Kept for reference only. Can be deleted if not needed.
+Implements LangChain middleware pattern to intercept search tool calls
+and automatically refine queries based on result quality.
 """
 
 import logging
-import time
-from typing import Any, Dict, List, Callable, Optional
+from typing import Callable
+
+from langchain.agents import AgentState
+from langchain.agents.middleware import wrap_tool_call
+from langchain.messages import ToolMessage
+from langchain.tools.tool_node import ToolCallRequest
+from langgraph.types import Command
 from typing_extensions import NotRequired
-from langchain.agents.middleware import AgentState, AgentMiddleware
-from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest, ToolMessage
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, trim_messages
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# CUSTOM STATE SCHEMA
-# ============================================================================
-
-class ArchiveSearchState(AgentState):
+class SearchRefinementState(AgentState):
     """
-    Custom state for archive search agent.
-    Extends base AgentState with search-specific tracking.
+    Custom state schema for search refinement tracking.
+    Extends AgentState (TypedDict) to add search-specific fields.
+    
+    Note: In LangChain 1.0, AgentState must be a TypedDict, not a Pydantic model.
+    Access fields using dict syntax: state["field_name"]
     """
-    # Track all search queries made in this conversation
-    search_queries_made: NotRequired[List[str]]
+    # Number of search attempts made for current query
+    search_attempt_count: NotRequired[int]
     
-    # Track all unique archives found (by ID)
-    archives_found: NotRequired[Dict[str, Dict[str, Any]]]
+    # Original user query before any refinement
+    original_user_query: NotRequired[str]
     
-    # User context and preferences
-    user_context: NotRequired[Dict[str, Any]]
+    # List of all queries tried (including original and refinements)
+    previous_queries_tried: NotRequired[list[str]]
     
-    # Conversation turn counter
-    conversation_turn: NotRequired[int]
-    
-    # Total tool calls made
-    tool_call_count: NotRequired[int]
+    # Best results found so far (highest similarity scores)
+    best_results: NotRequired[list[dict]]
 
 
-# ============================================================================
-# ERROR HANDLING MIDDLEWARE
-# ============================================================================
+# Configuration constants
+MAX_ATTEMPTS = 3
+MIN_SIMILARITY_THRESHOLD = 0.4
 
-class ErrorHandlingMiddleware(AgentMiddleware[ArchiveSearchState]):
+
+def _evaluate_results(archives: list[dict], min_similarity_threshold: float) -> bool:
     """
-    Handles tool call errors with retry logic and fallbacks.
+    Evaluate if results are good enough to return to user.
+    
+    Criteria:
+    - Results must not be empty
+    - At least one result must have similarity >= min_similarity_threshold
+    
+    Args:
+        archives: List of archive dictionaries from search tool
+        min_similarity_threshold: Minimum acceptable similarity score
+        
+    Returns:
+        True if results are acceptable, False otherwise
     """
+    if not archives:
+        logger.debug("Evaluation: No results found")
+        return False  # No results - need refinement
     
-    state_schema = ArchiveSearchState
+    # Check if at least one result has good similarity
+    # Handle None values by treating them as 0
+    good_results = [
+        archive for archive in archives
+        if (archive.get("similarity") or 0) >= min_similarity_threshold
+    ]
     
-    def __init__(self, max_retries: int = 3, backoff_factor: float = 2.0):
-        """
-        Initialize error handling middleware.
-        
-        Args:
-            max_retries: Maximum number of retry attempts
-            backoff_factor: Exponential backoff multiplier
-        """
-        super().__init__()
-        self.max_retries = max_retries
-        self.backoff_factor = backoff_factor
-        logger.info(f"Initialized ErrorHandlingMiddleware (retries={max_retries}, backoff={backoff_factor})")
+    has_good_results = len(good_results) > 0
+    logger.debug(
+        f"Evaluation: {len(good_results)}/{len(archives)} results above threshold "
+        f"(>={min_similarity_threshold})"
+    )
     
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage],
-    ) -> ToolMessage:
-        """
-        Execute tool with retry logic and error handling.
-        """
-        tool_name = request.tool_call.get("name", "unknown")
-        logger.debug(f"ErrorHandlingMiddleware wrapping: {tool_name}")
+    return has_good_results
+
+
+@wrap_tool_call
+def search_refinement_middleware(
+    request: ToolCallRequest,
+    handler: Callable[[ToolCallRequest], ToolMessage | Command],
+) -> ToolMessage | Command:
+    """
+    Middleware that intercepts search_archives_db tool calls and evaluates
+    result quality. If results are poor (empty or low similarity), it returns
+    a message asking the agent to refine the query.
+    
+    This implements the retry logic using LangChain's @wrap_tool_call decorator,
+    which is the recommended pattern for intercepting tool execution.
+    
+    Configuration:
+        MAX_ATTEMPTS: Maximum number of search attempts before giving up (default: 3)
+        MIN_SIMILARITY_THRESHOLD: Minimum similarity score to consider results acceptable (default: 0.4)
+    
+    State Tracking:
+        Uses SearchRefinementState to track:
+        - search_attempt_count: Number of attempts made
+        - original_user_query: The first query from user
+        - previous_queries_tried: All queries attempted
+        - best_results: Best results found so far
+    
+    Behavior:
+        1. Intercepts calls to search_archives_db
+        2. Executes the search and evaluates results
+        3. If results are good: Returns them to agent
+        4. If results are poor and attempts < max: Returns refinement request
+        5. If max attempts reached: Returns best results found
         
-        last_error = None
+    Args:
+        request: ToolCallRequest containing tool_call info and state
+        handler: Function to execute the actual tool
         
-        for attempt in range(self.max_retries):
-            try:
-                if attempt > 0:
-                    # Exponential backoff
-                    sleep_time = self.backoff_factor ** attempt
-                    logger.info(f"Retry attempt {attempt + 1}/{self.max_retries} for {tool_name} after {sleep_time}s")
-                    time.sleep(sleep_time)
-                
-                # Execute the tool
-                result = handler(request)
-                
-                # Validate result
-                if self._is_valid_result(result):
-                    if attempt > 0:
-                        logger.info(f"Tool {tool_name} succeeded on attempt {attempt + 1}")
-                    return result
-                else:
-                    logger.warning(f"Tool {tool_name} returned invalid result on attempt {attempt + 1}")
-                    last_error = "Invalid result returned"
-                    
-            except Exception as e:
-                last_error = str(e)
-                logger.warning(f"Tool {tool_name} failed on attempt {attempt + 1}: {last_error}")
-                
-                # Don't retry on certain errors
-                if "authentication" in last_error.lower() or "permission" in last_error.lower():
-                    logger.error(f"Non-retryable error for {tool_name}: {last_error}")
-                    break
+    Returns:
+        ToolMessage with results or refinement request
+    """
+    tool_name = request.tool_call.get("name")
+    
+    # Only intercept search_archives_db calls
+    if tool_name != "search_archives_db":
+        logger.debug(f"Skipping interception for tool: {tool_name}")
+        return handler(request)
+    
+    # Get current state (state is a dict, not an object)
+    state = request.state
+    attempt_count = state.get("search_attempt_count", 0)
+    original_query = state.get("original_user_query", "")
+    previous_queries = state.get("previous_queries_tried", [])
+    best_results = state.get("best_results", [])
+    
+    current_query = request.tool_call.get("args", {}).get("query", "")
+    
+    logger.info(
+        f"Intercepted search_archives_db call (attempt {attempt_count + 1}/{MAX_ATTEMPTS}): "
+        f"query='{current_query}'"
+    )
+    
+    # Record this as first query if not set
+    if not original_query:
+        original_query = current_query
+    
+    # Execute the search
+    try:
+        result = handler(request)
         
-        # All retries failed - return graceful error message
-        logger.error(f"Tool {tool_name} failed after {self.max_retries} attempts. Last error: {last_error}")
+        # Parse result - expect (message_str, archives_list) tuple
+        if isinstance(result, ToolMessage):
+            # Already a ToolMessage (error case or direct return)
+            return result
         
+        if isinstance(result, tuple) and len(result) == 2:
+            message_str, archives = result
+        else:
+            # Unexpected format - return as-is
+            logger.warning(f"Unexpected tool result format: {type(result)}")
+            return result
+        
+    except Exception as e:
+        logger.error(f"Error executing search tool: {e}")
         return ToolMessage(
-            content=f"Search temporarily unavailable. Please try again. (Error: {last_error})",
-            artifact=[],
-            tool_call_id=request.tool_call.get("id", "")
+            content=f"Search failed: {str(e)}",
+            tool_call_id=request.tool_call["id"]
         )
     
-    def _is_valid_result(self, result: ToolMessage) -> bool:
-        """Check if tool result is valid."""
-        if not result:
-            return False
-        
-        # Check for error messages in content
-        if hasattr(result, 'content'):
-            content = result.content.lower()
-            if "error" in content and "found 0" not in content:
-                return False
-        
-        return True
-
-
-# ============================================================================
-# DYNAMIC PROMPT MIDDLEWARE
-# ============================================================================
-
-class DynamicPromptMiddleware(AgentMiddleware[ArchiveSearchState]):
-    """
-    Injects dynamic context and trims messages before each LLM call.
-    """
+    # Evaluate results
+    results_are_good = _evaluate_results(archives, MIN_SIMILARITY_THRESHOLD)
     
-    state_schema = ArchiveSearchState
+    # Update best results if these are better
+    if archives and (not best_results or 
+                    max(((a.get("similarity") or 0) for a in archives), default=0) >
+                    max(((b.get("similarity") or 0) for b in best_results), default=0)):
+        best_results = archives
     
-    def __init__(self, max_tokens: int = 4000):
-        """
-        Initialize dynamic prompt middleware.
-        
-        Args:
-            max_tokens: Maximum tokens to keep in conversation history
-        """
-        super().__init__()
-        self.max_tokens = max_tokens
-        logger.info(f"Initialized DynamicPromptMiddleware (max_tokens={max_tokens})")
+    # Update tracking
+    new_attempt_count = attempt_count + 1
+    new_previous_queries = previous_queries + [current_query]
     
-    def before_model(
-        self,
-        state: ArchiveSearchState,
-        runtime: Any
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Process state before calling the model.
-        """
-        logger.debug("DynamicPromptMiddleware: Processing state before model call")
-        
-        messages = state.get("messages", [])
-        
-        # Trim messages to prevent context overflow
-        trimmed_messages = trim_messages(
-            messages,
-            max_tokens=self.max_tokens,
-            strategy="last",
-            token_counter=len,  # Simple token counter
-        )
-        
-        if len(trimmed_messages) < len(messages):
-            logger.info(f"Trimmed messages from {len(messages)} to {len(trimmed_messages)}")
-        
-        # Inject context about previous searches
-        search_queries = state.get("search_queries_made", [])
-        archives_found = state.get("archives_found", {})
-        
-        if search_queries:
-            context_message = SystemMessage(
-                content=f"Context: You have already searched {len(search_queries)} times. "
-                        f"Found {len(archives_found)} unique archives so far. "
-                        f"Previous queries: {', '.join(search_queries[-3:])}"
-            )
-            trimmed_messages.insert(-1, context_message)  # Insert before last user message
-            logger.debug(f"Injected context about {len(search_queries)} previous searches")
-        
-        return {"messages": trimmed_messages}
-
-
-# ============================================================================
-# STATE TRACKING MIDDLEWARE
-# ============================================================================
-
-class StateTrackingMiddleware(AgentMiddleware[ArchiveSearchState]):
-    """
-    Tracks search state and validates response quality.
-    """
-    
-    state_schema = ArchiveSearchState
-    
-    def __init__(self, min_similarity_threshold: float = 0.3):
-        """
-        Initialize state tracking middleware.
-        
-        Args:
-            min_similarity_threshold: Minimum similarity score to consider valid
-        """
-        super().__init__()
-        self.min_similarity_threshold = min_similarity_threshold
-        logger.info(f"Initialized StateTrackingMiddleware (min_similarity={min_similarity_threshold})")
-    
-    def after_model(
-        self,
-        state: ArchiveSearchState,
-        runtime: Any
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Update state after model generates response.
-        """
-        logger.debug("StateTrackingMiddleware: Processing state after model call")
-        
-        messages = state.get("messages", [])
-        if not messages:
-            return None
-        
-        # Increment conversation turn
-        current_turn = state.get("conversation_turn", 0)
-        
-        # Extract archives from tool messages
-        archives_found = state.get("archives_found", {})
-        
-        for message in messages:
-            if hasattr(message, 'artifact') and message.artifact:
-                for archive in message.artifact:
-                    archive_id = archive.get('id')
-                    similarity = archive.get('similarity', 0)
-                    
-                    # Only track high-quality results
-                    if archive_id and similarity >= self.min_similarity_threshold:
-                        if archive_id not in archives_found:
-                            archives_found[archive_id] = archive
-                            logger.debug(f"Tracked new archive: {archive.get('title')} (similarity: {similarity:.2f})")
-        
-        # Increment tool call counter
-        tool_call_count = state.get("tool_call_count", 0)
-        last_message = messages[-1]
-        if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
-            tool_call_count += len(last_message.tool_calls)
-        
-        logger.info(f"State update: Turn {current_turn + 1}, {len(archives_found)} archives tracked, {tool_call_count} tool calls")
-        
-        return {
-            "conversation_turn": current_turn + 1,
-            "archives_found": archives_found,
-            "tool_call_count": tool_call_count
-        }
-
-class ErrorHandlingMiddleware(AgentMiddleware[ArchiveSearchState]):
-    """
-    Handles tool call errors with retry logic and fallbacks.
-    """
-    
-    state_schema = ArchiveSearchState
-    
-    def __init__(self, max_retries: int = 3, backoff_factor: float = 2.0):
-        """
-        Initialize error handling middleware.
-        
-        Args:
-            max_retries: Maximum number of retry attempts
-            backoff_factor: Exponential backoff multiplier
-        """
-        super().__init__()
-        self.max_retries = max_retries
-        self.backoff_factor = backoff_factor
-        logger.info(f"Initialized ErrorHandlingMiddleware (retries={max_retries}, backoff={backoff_factor})")
-    
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage],
-    ) -> ToolMessage:
-        """
-        Execute tool with retry logic and error handling.
-        """
-        tool_name = request.tool_call.get("name", "unknown")
-        logger.debug(f"ErrorHandlingMiddleware wrapping: {tool_name}")
-        
-        last_error = None
-        
-        for attempt in range(self.max_retries):
-            try:
-                if attempt > 0:
-                    # Exponential backoff
-                    sleep_time = self.backoff_factor ** attempt
-                    logger.info(f"Retry attempt {attempt + 1}/{self.max_retries} for {tool_name} after {sleep_time}s")
-                    time.sleep(sleep_time)
-                
-                # Execute the tool
-                result = handler(request)
-                
-                # Validate result
-                if self._is_valid_result(result):
-                    if attempt > 0:
-                        logger.info(f"Tool {tool_name} succeeded on attempt {attempt + 1}")
-                    return result
-                else:
-                    logger.warning(f"Tool {tool_name} returned invalid result on attempt {attempt + 1}")
-                    last_error = "Invalid result returned"
-                    
-            except Exception as e:
-                last_error = str(e)
-                logger.warning(f"Tool {tool_name} failed on attempt {attempt + 1}: {last_error}")
-                
-                # Don't retry on certain errors
-                if "authentication" in last_error.lower() or "permission" in last_error.lower():
-                    logger.error(f"Non-retryable error for {tool_name}: {last_error}")
-                    break
-        
-        # All retries failed - return graceful error message
-        logger.error(f"Tool {tool_name} failed after {self.max_retries} attempts. Last error: {last_error}")
-        
+    # Decision logic
+    if results_are_good:
+        logger.info(f"✓ Results acceptable (attempt {new_attempt_count})")
         return ToolMessage(
-            content=f"Search temporarily unavailable. Please try again. (Error: {last_error})",
-            artifact=[],
-            tool_call_id=request.tool_call.get("id", "")
+            content=message_str,
+            tool_call_id=request.tool_call["id"]
         )
     
-    def _is_valid_result(self, result: ToolMessage) -> bool:
-        """Check if tool result is valid."""
-        if not result:
-            return False
-        
-        # Check for error messages in content
-        if hasattr(result, 'content'):
-            content = result.content.lower()
-            if "error" in content and "found 0" not in content:
-                return False
-        
-        return True
-
-
-# ============================================================================
-# DYNAMIC PROMPT MIDDLEWARE
-# ============================================================================
-
-class DynamicPromptMiddleware(AgentMiddleware[ArchiveSearchState]):
-    """
-    Injects dynamic context and trims messages before each LLM call.
-    """
-    
-    state_schema = ArchiveSearchState
-    
-    def __init__(self, max_tokens: int = 4000):
-        """
-        Initialize dynamic prompt middleware.
-        
-        Args:
-            max_tokens: Maximum tokens to keep in conversation history
-        """
-        super().__init__()
-        self.max_tokens = max_tokens
-        logger.info(f"Initialized DynamicPromptMiddleware (max_tokens={max_tokens})")
-    
-    def before_model(
-        self,
-        state: ArchiveSearchState,
-        runtime: Any
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Process state before calling the model.
-        """
-        logger.debug("DynamicPromptMiddleware: Processing state before model call")
-        
-        messages = state.get("messages", [])
-        
-        # Trim messages to prevent context overflow
-        trimmed_messages = trim_messages(
-            messages,
-            max_tokens=self.max_tokens,
-            strategy="last",
-            token_counter=len,  # Simple token counter
-        )
-        
-        if len(trimmed_messages) < len(messages):
-            logger.info(f"Trimmed messages from {len(messages)} to {len(trimmed_messages)}")
-        
-        # Inject context about previous searches
-        search_queries = state.get("search_queries_made", [])
-        archives_found = state.get("archives_found", {})
-        
-        if search_queries:
-            context_message = SystemMessage(
-                content=f"Context: You have already searched {len(search_queries)} times. "
-                        f"Found {len(archives_found)} unique archives so far. "
-                        f"Previous queries: {', '.join(search_queries[-3:])}"
+    if new_attempt_count >= MAX_ATTEMPTS:
+        logger.info(f"⚠ Max attempts reached ({MAX_ATTEMPTS}), returning best results")
+        if best_results:
+            return ToolMessage(
+                content=f"Found {len(best_results)} results after {new_attempt_count} attempts.",
+                tool_call_id=request.tool_call["id"]
             )
-            trimmed_messages.insert(-1, context_message)  # Insert before last user message
-            logger.debug(f"Injected context about {len(search_queries)} previous searches")
-        
-        return {"messages": trimmed_messages}
-
-
-# ============================================================================
-# STATE TRACKING MIDDLEWARE
-# ============================================================================
-
-class StateTrackingMiddleware(AgentMiddleware[ArchiveSearchState]):
-    """
-    Tracks search state and validates response quality.
-    """
+        else:
+            return ToolMessage(
+                content=f"No good results found after {new_attempt_count} attempts. Try a different query.",
+                tool_call_id=request.tool_call["id"]
+            )
     
-    state_schema = ArchiveSearchState
+    # Results are poor and we can retry
+    logger.info(f"⟳ Results poor, requesting refinement (attempt {new_attempt_count}/{MAX_ATTEMPTS})")
     
-    def __init__(self, min_similarity_threshold: float = 0.3):
-        """
-        Initialize state tracking middleware.
-        
-        Args:
-            min_similarity_threshold: Minimum similarity score to consider valid
-        """
-        super().__init__()
-        self.min_similarity_threshold = min_similarity_threshold
-        logger.info(f"Initialized StateTrackingMiddleware (min_similarity={min_similarity_threshold})")
+    refinement_message = (
+        f"The search query '{current_query}' returned {len(archives)} results, "
+        f"but none had high enough relevance (similarity < {MIN_SIMILARITY_THRESHOLD}). "
+        f"\n\nPrevious queries tried: {', '.join(previous_queries)}\n\n"
+        f"Please refine the query with different keywords or phrasing. "
+        f"Consider: more specific terms, related concepts, alternative terminology."
+    )
     
-    def after_model(
-        self,
-        state: ArchiveSearchState,
-        runtime: Any
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Update state after model generates response.
-        """
-        logger.debug("StateTrackingMiddleware: Processing state after model call")
-        
-        messages = state.get("messages", [])
-        if not messages:
-            return None
-        
-        # Increment conversation turn
-        current_turn = state.get("conversation_turn", 0)
-        
-        # Extract archives from tool messages
-        archives_found = state.get("archives_found", {})
-        
-        for message in messages:
-            if hasattr(message, 'artifact') and message.artifact:
-                for archive in message.artifact:
-                    archive_id = archive.get('id')
-                    similarity = archive.get('similarity', 0)
-                    
-                    # Only track high-quality results
-                    if archive_id and similarity >= self.min_similarity_threshold:
-                        if archive_id not in archives_found:
-                            archives_found[archive_id] = archive
-                            logger.debug(f"Tracked new archive: {archive.get('title')} (similarity: {similarity:.2f})")
-        
-        # Increment tool call counter
-        tool_call_count = state.get("tool_call_count", 0)
-        last_message = messages[-1]
-        if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
-            tool_call_count += len(last_message.tool_calls)
-        
-        logger.info(f"State update: Turn {current_turn + 1}, {len(archives_found)} archives tracked, {tool_call_count} tool calls")
-        
-        return {
-            "conversation_turn": current_turn + 1,
-            "archives_found": archives_found,
-            "tool_call_count": tool_call_count
-        }
+    return ToolMessage(
+        content=refinement_message,
+        tool_call_id=request.tool_call["id"]
+    )
+
