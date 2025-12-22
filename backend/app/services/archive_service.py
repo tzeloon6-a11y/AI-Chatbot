@@ -94,6 +94,168 @@ class ArchiveService:
                 detail=f"Failed to upload file to storage: {exc.message}",
             ) from exc
     
+    async def _download_file_from_supabase_storage(
+        self,
+        storage_path: str
+    ) -> bytes:
+        """Download file content from Supabase Storage."""
+        storage_bucket = self.supabase_client.storage.from_(self.storage_bucket)
+        loop = asyncio.get_event_loop()
+
+        def _download():
+            response = storage_bucket.download(storage_path)
+            return response
+
+        try:
+            return await loop.run_in_executor(self._executor, _download)
+        except StorageException as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to download file from storage: {exc.message}",
+            ) from exc
+    
+    async def _upload_file_content_to_genai(
+        self,
+        content: bytes,
+        filename: str,
+        mime_type: str
+    ):
+        """
+        Upload file content to Google GenAI and return the file object.
+        
+        Args:
+            content: File content as bytes
+            filename: Name of the file
+            mime_type: MIME type of the file
+            
+        Returns:
+            Uploaded file object from Google GenAI
+        """
+        suffix = Path(filename).suffix
+        temp_path = self._create_temp_file(content, suffix)
+        
+        try:
+            loop = asyncio.get_event_loop()
+
+            def upload_file():
+                return self.client.files.upload(
+                    file=temp_path,
+                    config=types.UploadFileConfig(
+                        display_name=filename,
+                        mime_type=mime_type,
+                    ),
+                )
+
+            uploaded_file = await loop.run_in_executor(
+                self._executor,
+                upload_file,
+            )
+
+            # Wait for file to be processed
+            max_wait_time = 300
+            wait_interval = 2
+            elapsed_time = 0
+
+            while uploaded_file.state == "PROCESSING" and elapsed_time < max_wait_time:
+                await asyncio.sleep(wait_interval)
+                elapsed_time += wait_interval
+
+                file_name = uploaded_file.name
+
+                def get_file():
+                    return self.client.files.get(name=file_name)
+
+                uploaded_file = await loop.run_in_executor(
+                    self._executor,
+                    get_file,
+                )
+
+            if uploaded_file.state != "ACTIVE":
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"File {filename} failed to process. State: {uploaded_file.state}",
+                )
+
+            return uploaded_file
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to upload file to GenAI: {exc}",
+            ) from exc
+        finally:
+            # Cleanup temporary file
+            self._cleanup_temp_file(temp_path)
+    
+    async def fetch_and_upload_files_from_storage(
+        self,
+        storage_paths: List[str]
+    ) -> List:
+        """
+        Fetch files from Supabase storage and upload them to Google GenAI.
+        This is used when GenAI files have expired and we need to regenerate analysis.
+        
+        Args:
+            storage_paths: List of Supabase storage paths
+            
+        Returns:
+            List of uploaded file objects from Google GenAI
+        """
+        if not storage_paths:
+            raise HTTPException(status_code=400, detail="No storage paths provided")
+
+        uploaded_files = []
+        
+        for storage_path in storage_paths:
+            try:
+                # Download file from Supabase
+                content = await self._download_file_from_supabase_storage(storage_path)
+                
+                # Extract filename and determine MIME type
+                filename = storage_path.split('/')[-1]
+                
+                # Infer MIME type from filename extension
+                suffix = Path(filename).suffix.lower()
+                mime_type_map = {
+                    '.jpg': 'image/jpeg',
+                    '.jpeg': 'image/jpeg',
+                    '.png': 'image/png',
+                    '.gif': 'image/gif',
+                    '.webp': 'image/webp',
+                    '.mp4': 'video/mp4',
+                    '.mov': 'video/quicktime',
+                    '.avi': 'video/x-msvideo',
+                    '.mp3': 'audio/mpeg',
+                    '.wav': 'audio/wav',
+                    '.pdf': 'application/pdf',
+                    '.doc': 'application/msword',
+                    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    '.txt': 'text/plain',
+                }
+                mime_type = mime_type_map.get(suffix, 'application/octet-stream')
+                
+                # Upload to GenAI
+                uploaded_file = await self._upload_file_content_to_genai(
+                    content=content,
+                    filename=filename,
+                    mime_type=mime_type
+                )
+                
+                uploaded_files.append(uploaded_file)
+                
+            except Exception as e:
+                print(f"Error processing file {storage_path}: {e}")
+                # Continue with other files
+                continue
+        
+        if not uploaded_files:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to upload any files to GenAI from storage"
+            )
+        
+        return uploaded_files
+    
     def _get_comprehensive_analysis_prompt(
         self,
         title: str,
@@ -146,125 +308,110 @@ class ArchiveService:
         
         media_guidance = "\n".join(f"- {instr}" for instr in media_instructions) if media_instructions else "- Analyze all media types comprehensively"
         
-        prompt = f"""# Role and Task Assignment
+        prompt = f"""# Role and Context
 
-You are an expert content analyst and information extraction specialist with expertise in multimodal content analysis. Your task is to comprehensively analyze the uploaded materials and generate a detailed, structured summary that captures all essential information, context, and insights.
+You are a Malaysian cultural heritage expert and curator assistant specializing in archiving and documenting Malaysian heritage materials. You are analyzing content for an AI-powered heritage search system used by curators and researchers.
+
+**Application Context**: This is a heritage archiving system for Malaysian cultural materials including traditional crafts, historical artifacts, cultural practices, architecture, textiles, art, and documentation.
+
+# Archive Information
+
+**Title**: {title}
+**Media Types**: {media_types_str}
+**Tags**: {tags_str}
+**Description**: {description if description else "Not provided"}
 
 ---
 
-# Context Information
+# Your Task
 
-**Archive Title**: {title}
-**Media Types Present**: {media_types_str}
-**User Tags**: {tags_str}
-**User Description**: {description if description else "Not provided by user"}
+Analyze the uploaded materials and create a CONCISE, searchable summary that captures the essential heritage information. This summary will be used for:
+1. AI-powered semantic search to help curators find relevant materials
+2. Quick overview of the archive content
+3. Generating text embeddings for search functionality
+
+**CRITICAL LENGTH REQUIREMENT**: Your summary MUST be between 300-800 words maximum. This limit ensures optimal embedding generation (Google text-embedding-004 has ~1500 word limit, but we need buffer space).
 
 ---
 
-# Analysis Framework
-
-Follow this structured approach to ensure comprehensive analysis:
-
-## Step 1: Initial Assessment
-Think step-by-step:
-1. First, identify what types of content are present in the uploaded materials
-2. Determine the primary purpose or intent of the content
-3. Note any relationships or connections between different media files
-4. Consider how the user-provided title, tags, and description relate to the actual content
-
-## Step 2: Content-Specific Analysis
-
-For each type of media present, perform detailed analysis:
+# Analysis Instructions
 
 {media_guidance}
 
-## Step 3: Cross-Media Analysis (if multiple files)
-- Identify relationships and connections between different files
-- Note any recurring themes, concepts, or information across media
-- Determine if files tell a cohesive story or relate to the same topic
-- Highlight any contradictions or complementary information
-
-## Step 4: Information Extraction
-
-Extract and organize the following information systematically:
-
-**Quantitative Data**:
-- Numbers, statistics, measurements, percentages, dates, times
-- Financial figures, quantities, metrics, scores, ratings
-
-**Qualitative Information**:
-- Names of people, places, organizations, products, brands
-- Key concepts, themes, topics, subjects
-- Emotions, opinions, perspectives expressed
-- Events, actions, processes described
-
-**Notable Elements**:
-- Important quotes or statements (use exact wording when possible)
-- Technical terms, jargon, or specialized vocabulary
-- References to other sources, documents, or external information
-- Calls to action, recommendations, or conclusions
-
-## Step 5: Contextual and Semantic Analysis
-
-- **Temporal Context**: Identify time periods, dates, chronological sequences, or temporal relationships
-- **Spatial Context**: Note locations, geographical references, spatial relationships, or environments
-- **Cultural/Social Context**: Identify cultural references, social norms, historical significance, or societal implications
-- **Professional Context**: Recognize industry-specific content, professional domains, or technical contexts
-- **Implicit Meanings**: Infer subtext, implied messages, underlying themes, or unstated connections
-- **Significance**: Assess importance, relevance, urgency, or impact of the content
-
-## Step 6: Synthesis and Summary Generation
-
-Create a comprehensive summary that:
-
-1. **Executive Overview** (2-3 sentences):
-   - High-level summary of what the content is about
-   - Primary purpose and main subject matter
-
-2. **Detailed Content Summary** (structured by topic/theme):
-   - Organized breakdown of key information
-   - Each major topic or theme as a separate section
-   - Include specific details, facts, and insights
-
-3. **Key Findings and Insights**:
-   - Most important information extracted
-   - Notable patterns, trends, or observations
-   - Significant facts, figures, or statements
-   - Any surprising or noteworthy elements
-
-4. **Contextual Relevance**:
-   - How content relates to the provided title
-   - Alignment with user tags and description
-   - Additional context that may not have been captured in user metadata
+**Focus on Heritage-Specific Information**:
+- **Cultural significance**: Historical, cultural, or traditional importance
+- **Geographic origin**: Specific Malaysian states, regions, cities, or communities
+- **Time period**: Era, decade, or specific dates when relevant
+- **Cultural context**: Ethnic group, tradition, ceremony, or cultural practice
+- **Materials/techniques**: Traditional craftsmanship methods, materials used
+- **People/organizations**: Artists, craftspeople, cultural institutions
+- **Visual elements**: Colors, patterns, motifs, symbols (for images/art)
+- **Condition/provenance**: State of preservation, origin, or ownership history
 
 ---
 
-# Output Requirements
+# Output Format
 
-**Structure**: Provide your analysis as a well-organized, readable text that flows naturally while maintaining clear structure.
+Provide a well-structured, concise summary organized as follows:
 
-**Depth**: Be thorough and detailed. Include specific information, facts, figures, names, dates, and other concrete details rather than vague generalizations.
+**1. Overview** (2-3 sentences):
+Brief description of what this archive contains and its primary subject.
 
-**Accuracy**: Focus on factual information present in the content. Distinguish between what is explicitly stated versus what is inferred.
+**2. Heritage Details**:
+- **Name/Type**: What is this item/material called? What category does it belong to?
+- **Description**: Physical characteristics, visual elements, key features
+- **Cultural Context**: Malaysian heritage relevance, ethnic/regional associations, traditional significance
+- **Location/Origin**: Geographic location, state, region, or community
+- **Time Period**: When it's from or when documented (if applicable)
+- **Materials/Technique**: Craftsmanship methods, materials, artistic techniques (if applicable)
 
-**Completeness**: Ensure all significant information from all uploaded files is captured. Do not omit important details.
+**3. Key Content**:
+List the most important facts, observations, or notable elements found in the materials. Be specific and factual.
 
-**Clarity**: Use clear, professional language. Organize information logically and make it easy to understand.
-
-**Length**: The summary should be comprehensive enough to capture all essential information (typically 500-1500 words depending on content volume and complexity).
+**4. Search Keywords**:
+Provide relevant keywords that would help curators find this archive (e.g., "batik", "Penang", "traditional weaving", "Malay architecture").
 
 ---
 
-# Instructions
+# Quality Guidelines
 
-1. Analyze ALL uploaded materials systematically
-2. Consider the user-provided context (title, tags, description) but prioritize actual content analysis
-3. Be thorough in extracting both explicit and implicit information
-4. Maintain objectivity while noting any subjective elements (emotions, opinions) present
-5. Organize information logically for easy comprehension
-6. Ensure the summary is self-contained and understandable without viewing the original files
+✅ **DO**:
+- Be concise and information-dense (300-800 words MAXIMUM)
+- Use specific Malaysian heritage terminology
+- Include geographic locations (states, cities, regions)
+- Mention ethnic groups, cultural practices, traditional names
+- Note time periods, dates, or eras
+- Describe visual/physical characteristics clearly
+- Focus on factual, searchable information
+- Use heritage curator vocabulary
 
-Begin your analysis now and provide the comprehensive summary."""
+❌ **DON'T**:
+- Exceed 800 words (CRITICAL - embedding limit)
+- Write long, flowery descriptions
+- Include unnecessary commentary or analysis
+- Repeat the same information multiple times
+- Use vague generalizations
+- Include meta-commentary about your analysis process
+
+---
+
+# Example Structure (Reference Only)
+
+**Overview**: This archive contains photographs and documentation of traditional Peranakan beaded slippers (kasut manek) from Melaka, showcasing intricate needlework techniques from the early 20th century.
+
+**Heritage Details**:
+- **Name/Type**: Kasut Manek (Peranakan Beaded Slippers), traditional footwear
+- **Description**: Handcrafted slippers featuring colorful glass bead embroidery with floral and phoenix motifs on velvet base
+- **Cultural Context**: Peranakan/Straits Chinese heritage, traditionally worn for weddings and special occasions
+- **Location/Origin**: Melaka, Malaysia
+- **Time Period**: Early 1900s (circa 1920s-1930s)
+- **Materials/Technique**: Glass seed beads, velvet, silk thread, hand-beading needlework
+
+**Key Content**: [Specific details from the actual files...]
+
+**Search Keywords**: Peranakan, kasut manek, beaded slippers, Melaka, Straits Chinese, traditional footwear, handcraft, embroidery, heritage craft, Nyonya culture
+
+Begin your analysis now. Remember: MAXIMUM 800 WORDS."""
         
         return prompt.strip()
     

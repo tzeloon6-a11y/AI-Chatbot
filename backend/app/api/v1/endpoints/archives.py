@@ -182,13 +182,6 @@ async def delete_archive(archive_id: str):
                     print(f"Error deleting file from storage {storage_path}: {e}")
                     # Continue even if file deletion fails
         
-        # Delete files from Google GenAI if they exist
-        if "genai_file_ids" in archive and archive["genai_file_ids"]:
-            # Note: GenAI file deletion would require the genai client
-            # For now, we'll just log this - the files will be cleaned up by GenAI eventually
-            print(f"GenAI files to be deleted: {archive['genai_file_ids']}")
-            # TODO: Implement GenAI file deletion when needed
-        
         # Delete the archive record from the database
         delete_response = supabase.table("archives").delete().eq("id", archive_id).execute()
         
@@ -337,11 +330,11 @@ async def update_archive(
         if not update_payload:
             raise HTTPException(status_code=400, detail="No fields to update")
         
-        # Get GenAI file objects for regenerating summary
-        genai_file_ids = existing_archive.get("genai_file_ids", [])
+        # Get storage paths to fetch files from Supabase
+        storage_paths = existing_archive.get("storage_paths", [])
         
-        if not genai_file_ids:
-            # If no GenAI files, just update the metadata without regenerating summary
+        if not storage_paths:
+            # If no storage paths, just update the metadata without regenerating summary
             update_response = supabase.table("archives").update(update_payload).eq("id", archive_id).execute()
             
             if not update_response.data:
@@ -355,31 +348,16 @@ async def update_archive(
             
             # Add file URIs
             file_uris = []
-            if "storage_paths" in updated_archive and updated_archive["storage_paths"]:
-                for storage_path in updated_archive["storage_paths"]:
-                    try:
-                        public_url_response = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
-                        public_url = normalize_public_url(public_url_response)
-                        if public_url:
-                            file_uris.append(public_url)
-                    except Exception as e:
-                        print(f"Error generating public URL for {storage_path}: {e}")
-            
             updated_archive["file_uris"] = file_uris
             return updated_archive
         
-        # Regenerate AI summary with updated user metadata
-        # Get the GenAI file objects
-        uploaded_files = []
-        for file_id in genai_file_ids:
-            try:
-                file_obj = archive_service.client.files.get(name=file_id)
-                uploaded_files.append(file_obj)
-            except Exception as e:
-                print(f"Warning: Could not retrieve GenAI file {file_id}: {e}")
-        
-        if not uploaded_files:
-            # If we couldn't get any files, just update metadata
+        # Fetch files from Supabase storage and upload to GenAI for analysis
+        # This ensures we always have access to files even if GenAI files expired
+        try:
+            uploaded_files = await archive_service.fetch_and_upload_files_from_storage(storage_paths)
+        except Exception as e:
+            print(f"Error fetching files from storage: {e}")
+            # If we can't fetch files, just update metadata without regenerating summary
             update_response = supabase.table("archives").update(update_payload).eq("id", archive_id).execute()
             
             if not update_response.data:
