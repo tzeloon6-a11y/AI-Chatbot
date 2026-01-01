@@ -44,16 +44,15 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = currentView === item.id;
-            
+
             return (
               <li key={item.id}>
                 <button
                   onClick={() => onViewChange(item.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
-                    isActive
-                      ? 'bg-forest text-white shadow-md'
-                      : 'text-stone-700 hover:bg-stone-200'
-                  }`}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${isActive
+                    ? 'bg-forest text-white shadow-md'
+                    : 'text-stone-700 hover:bg-stone-200'
+                    }`}
                 >
                   <Icon className="w-5 h-5 shrink-0" />
                   <div className="text-left flex-1">

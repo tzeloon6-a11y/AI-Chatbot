@@ -16,13 +16,11 @@ from app.core.config import settings
 from app.services.ai_search.tools import search_archives_db, read_archives_data
 
 logger = logging.getLogger(__name__)
-from datetime import datetime
-today = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
 
 
 
 # Updated system prompt with intent classification and refinement logic
-SEARCH_AGENT_PROMPT = """You are a heritage archive search assistant with intent classification, chain-of-thought reasoning, and database access. Todays date and current time is {today}
+SEARCH_AGENT_PROMPT = """You are a heritage archive search assistant with intent classification, chain-of-thought reasoning, and database access. <remember>Todays date and current time is {today} </remember>
 
 CRITICAL: You MUST classify user intent BEFORE calling any tools. DO NOT call search tools for greetings, unclear queries, or unrelated questions.
 
@@ -217,11 +215,15 @@ class ArchiveSearchAgentV2:
         # Memory for conversation persistence
         self.memory = InMemorySaver()
         
+        # Get current date/time for the system prompt
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         # Create agent with chain-of-thought reasoning
         self.agent = create_agent(
             model=self.llm,
             tools=self.tools,
-            system_prompt=SEARCH_AGENT_PROMPT,
+            system_prompt=SEARCH_AGENT_PROMPT.format(today=today),
             # checkpointer=self.memory,
         )
         logger.info("ArchiveSearchAgentV2 initialized with chain-of-thought multi-tool reasoning")
@@ -388,8 +390,36 @@ class ArchiveSearchAgentV2:
                 )
                 
                 if not has_tool_calls and not has_tool_artifacts:
+                    content = last_msg.content
+                    
+                    # Handle multimodal content format from Gemini
+                    # Content can be a list of dicts like [{'type': 'text', 'text': '...'}]
+                    if isinstance(content, list):
+                        text_parts = []
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                text_parts.append(part.get("text", ""))
+                            elif isinstance(part, str):
+                                text_parts.append(part)
+                        content = " ".join(text_parts) if text_parts else ""
+                    
+                    # Filter out tool code that was incorrectly returned as text
+                    # This happens when the model outputs code instead of calling tools
+                    tool_code_patterns = [
+                        "tool_code",
+                        "default_api.",
+                        "search_archives_db(",
+                        "read_archives_data(",
+                        "print(default_api",
+                    ]
+                    
+                    # If content contains tool code patterns, don't return it as a message
+                    if any(pattern in content for pattern in tool_code_patterns):
+                        logger.warning(f"Tool code detected in content, filtering out: {content}")
+                        return None
+                    
                     # Pure text response
-                    return last_msg.content
+                    return content
         
         return None
     

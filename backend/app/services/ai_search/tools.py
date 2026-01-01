@@ -170,6 +170,8 @@ def search_archives_db(
 def read_archives_data(
     filter_by: Optional[str] = None,
     filter_value: Optional[str] = None,
+    date_after: Optional[str] = None,
+    date_before: Optional[str] = None,
     limit: int = 20,
     order_by: str = "created_at",
     order_desc: bool = True
@@ -178,9 +180,15 @@ def read_archives_data(
     Read archive records from the Supabase database with flexible filtering.
     This is a READ-ONLY tool - no write, update, or delete operations are allowed.
     
+    IMPORTANT: All date filtering is based on UPLOAD DATE (created_at), not content dates.
+    - "today" = materials uploaded today
+    - "this month" = materials uploaded this month
+    - "recent" = recently uploaded materials
+    
     Use this tool when you need to:
     - Browse existing archives by specific criteria
     - Check archive metadata (title, tags, dates, media types)
+    - Filter by upload date ranges
     - Verify what archives exist in the database
     - Get detailed information about archives
     
@@ -188,8 +196,7 @@ def read_archives_data(
     - "tag": Filter archives containing a specific tag (e.g., "batik", "heritage")
     - "media_type": Filter by media type ("image", "video", "audio", "document")
     - "title": Search archives with title containing the filter value
-    - "date_after": Filter archives created after a specific date (ISO format: YYYY-MM-DD)
-    - "date_before": Filter archives created before a specific date (ISO format: YYYY-MM-DD)
+    - date_after + date_before: Filter archives by upload date range (ISO format: YYYY-MM-DD)
     - None: Return all archives (default)
     
     Examples:
@@ -197,14 +204,18 @@ def read_archives_data(
       → Returns up to 10 archives tagged with "batik"
     - read_archives_data(filter_by="media_type", filter_value="video", limit=5)
       → Returns up to 5 video archives
-    - read_archives_data(filter_by="title", filter_value="Georgetown")
-      → Returns archives with "Georgetown" in the title
+    - read_archives_data(date_after="2025-12-01", date_before="2025-12-31", limit=50)
+      → Returns archives uploaded in December 2025
+    - read_archives_data(date_after="2025-12-31", limit=50)
+      → Returns archives uploaded on or after December 31, 2025
     - read_archives_data(limit=15, order_by="updated_at")
       → Returns 15 most recently updated archives
     
     Args:
-        filter_by: Optional filter field ("tag", "media_type", "title", "date_after", "date_before")
+        filter_by: Optional filter field ("tag", "media_type", "title")
         filter_value: Value to filter by (required if filter_by is specified)
+        date_after: Filter archives uploaded on or after this date (ISO format: YYYY-MM-DD)
+        date_before: Filter archives uploaded on or before this date (ISO format: YYYY-MM-DD)
         limit: Maximum number of records to return (1-50, default: 20)
         order_by: Field to sort by ("created_at", "updated_at", "title", default: "created_at")
         order_desc: Sort in descending order (default: True for newest first)
@@ -214,7 +225,7 @@ def read_archives_data(
         - formatted_string: Human-readable summary of found archives
         - raw_records: List of archive records with full metadata
     """
-    logger.info(f"Reading archives data with filter: {filter_by}={filter_value}, limit={limit}")
+    logger.info(f"Reading archives data with filter: {filter_by}={filter_value}, date_after={date_after}, date_before={date_before}, limit={limit}")
     
     # Get Supabase client
     supabase = get_supabase_client()
@@ -234,7 +245,7 @@ def read_archives_data(
             "created_at, updated_at, storage_paths"
         )
         
-        # Apply filters if specified
+        # Apply metadata filters if specified
         if filter_by and filter_value:
             if filter_by == "tag":
                 # Filter arrays that contain the tag
@@ -245,14 +256,19 @@ def read_archives_data(
             elif filter_by == "title":
                 # Case-insensitive title search
                 query = query.ilike("title", f"%{filter_value}%")
-            elif filter_by == "date_after":
-                # Filter archives created after specified date
-                query = query.gte("created_at", filter_value)
-            elif filter_by == "date_before":
-                # Filter archives created before specified date
-                query = query.lte("created_at", filter_value)
             else:
                 logger.warning(f"Unknown filter type: {filter_by}")
+        
+        # Apply date range filters (based on upload date - created_at)
+        if date_after:
+            logger.debug(f"Applying date_after filter: created_at >= {date_after}")
+            query = query.gte("created_at", date_after)
+        
+        if date_before:
+            # Add one day to include the entire day (before end of date_before)
+            # This ensures that date_before="2025-12-31" includes all of Dec 31
+            logger.debug(f"Applying date_before filter: created_at <= {date_before}T23:59:59")
+            query = query.lte("created_at", f"{date_before}T23:59:59")
         
         # Apply ordering
         query = query.order(order_by, desc=order_desc)
@@ -287,7 +303,14 @@ def read_archives_data(
         
         # Format the results
         if not archives:
-            filter_desc = f" matching filter '{filter_by}={filter_value}'" if filter_by else ""
+            filter_parts = []
+            if filter_by:
+                filter_parts.append(f"{filter_by}={filter_value}")
+            if date_after:
+                filter_parts.append(f"uploaded after {date_after}")
+            if date_before:
+                filter_parts.append(f"uploaded before {date_before}")
+            filter_desc = f" matching filter '{', '.join(filter_parts)}'" if filter_parts else ""
             return f"No archives found{filter_desc}.", []
         
         # Create formatted string for the agent
@@ -313,7 +336,15 @@ def read_archives_data(
                 f"   Created: {created_at}"
             )
         
-        filter_desc = f" (filtered by {filter_by}={filter_value})" if filter_by else ""
+        filter_parts = []
+        if filter_by:
+            filter_parts.append(f"{filter_by}={filter_value}")
+        if date_after:
+            filter_parts.append(f"uploaded after {date_after}")
+        if date_before:
+            filter_parts.append(f"uploaded before {date_before}")
+        filter_desc = f" (filtered by {', '.join(filter_parts)})" if filter_parts else ""
+        
         formatted_string = (
             f"Found {len(archives)} archive(s){filter_desc}:\n"
             + "\n".join(formatted_results)

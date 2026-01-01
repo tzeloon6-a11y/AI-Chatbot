@@ -66,24 +66,11 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
     keywords: '',
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when messages or typing state changes
-  const scrollToBottom = () => {
-    const scrollViewport = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
-    if (scrollViewport) {
-      // Immediate scroll without delay for user-triggered actions
-      scrollViewport.scrollTop = scrollViewport.scrollHeight;
-      // Also schedule a delayed scroll to catch any late-rendering content
-      setTimeout(() => {
-        scrollViewport.scrollTop = scrollViewport.scrollHeight;
-      }, 100);
-    }
-  };
-
-  // Scroll on messages or typing state change
   useEffect(() => {
-    scrollToBottom();
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -117,14 +104,11 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
 
     setMessages((prev) => [...prev, userMessage]);
     setIsTyping(true);
-    
-    // Scroll to bottom immediately after sending message
-    scrollToBottom();
 
     try {
       // Call backend API
       const result = await aiSearchArchives(queryText);
-      
+
       // Check response type
       if (result.response_type === 'message') {
         // Non-search intent (UNCLEAR, UNRELATED, GREETING)
@@ -142,7 +126,7 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
           // Normalize file URIs to extract proper URLs from Supabase objects
           const normalizedUris = (archive.file_uris || archive.storage_paths || []).map(normalizeFileUri).filter((uri): uri is string => !!uri);
           const fileUrl = normalizedUris[0] || 'https://via.placeholder.com/400';
-          
+
           return {
             id: archive.id,
             title: archive.title,
@@ -164,9 +148,9 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
           timestamp: new Date(),
           archiveResults: searchResults.length > 0 ? searchResults : undefined,
         };
-        
+
         setMessages((prev) => [...prev, aiMessage]);
-        
+
         // User feedback
         if (searchResults.length > 0) {
           toast.success(`Found ${searchResults.length} matching archive(s)`);
@@ -222,7 +206,7 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
 
       {/* Messages */}
       <div className="flex-1 overflow-hidden">
-        <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
+        <ScrollArea className="h-full p-4">
           <div className="space-y-4">
             <AnimatePresence>
               {messages.map((message) => (
@@ -238,6 +222,9 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {/* Scroll anchor */}
+            <div ref={bottomRef} />
           </div>
         </ScrollArea>
       </div>
@@ -262,7 +249,7 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
             ))}
           </div>
         )}
-        
+
         <div className="flex gap-2">
           <input
             type="file"
@@ -272,7 +259,7 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
             multiple
             accept="image/*,video/*,audio/*,.pdf,.doc,.docx"
           />
-          
+
           <Button
             variant="outline"
             size="icon"
@@ -281,7 +268,7 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
           >
             <Paperclip className="w-4 h-4" />
           </Button>
-          
+
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -290,7 +277,7 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
             className="flex-1"
             disabled={isTyping}
           />
-          
+
           <Button
             onClick={handleSend}
             disabled={(!input.trim() && selectedFiles.length === 0) || isTyping}
@@ -306,7 +293,7 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
         <QuickSearchButtons onSearch={async (query) => {
           // IMMEDIATE: Clear input and set query
           setInput('');
-          
+
           // Create user message
           const userMessage: ChatMessageType = {
             id: Date.now().toString(),
@@ -320,7 +307,7 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
 
           try {
             const result = await aiSearchArchives(query);
-            
+
             // Check response type
             if (result.response_type === 'message') {
               // Non-search intent
@@ -337,7 +324,7 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
                 // Normalize file URIs to extract proper URLs from Supabase objects
                 const normalizedUris = (archive.file_uris || archive.storage_paths || []).map(normalizeFileUri).filter((uri): uri is string => !!uri);
                 const fileUrl = normalizedUris[0] || 'https://via.placeholder.com/400';
-                
+
                 return {
                   id: archive.id,
                   title: archive.title,
@@ -358,9 +345,9 @@ export function ChatPanel({ messages, setMessages }: ChatPanelProps) {
                 timestamp: new Date(),
                 archiveResults: searchResults.length > 0 ? searchResults : undefined,
               };
-              
+
               setMessages((prev) => [...prev, aiMessage]);
-              
+
               if (searchResults.length > 0) {
                 toast.success(`Found ${searchResults.length} matching archive(s)`);
               } else {

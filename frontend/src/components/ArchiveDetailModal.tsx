@@ -125,9 +125,9 @@ export function ArchiveDetailModal({
       toast.error('Description is required');
       return;
     }
-    
+
     setIsSaving(true);
-    
+
     try {
       // Call update API - this will regenerate the AI summary in the background
       const response = await updateArchive(editedItem.id, {
@@ -136,17 +136,17 @@ export function ArchiveDetailModal({
         tags: editedItem.tags,
         dates: [editedItem.date],
       });
-      
+
       // Map response to ArchiveItem
       const normalizedUris = Array.isArray(response.file_uris)
         ? response.file_uris.filter((uri): uri is string => Boolean(uri))
         : [];
-      
+
       const fileUrl = normalizedUris[0] ?? editedItem.fileUrl;
       const primaryType = response.media_types && response.media_types.length > 0
         ? response.media_types[0]
         : editedItem.type;
-      
+
       const updatedItem: ArchiveItem = {
         id: response.id,
         title: response.title,
@@ -160,13 +160,13 @@ export function ArchiveDetailModal({
         thumbnail: primaryType === 'image' ? fileUrl : editedItem.thumbnail,
         file_uris: normalizedUris,
       };
-      
+
       setEditedItem(updatedItem);
-      
+
       if (onSave) {
         onSave(updatedItem);
       }
-      
+
       setIsEditMode(false);
       toast.success('Archive updated successfully! AI summary regenerated.');
     } catch (error) {
@@ -207,7 +207,7 @@ export function ArchiveDetailModal({
     // If there are multiple files, download all of them
     if (editedItem.file_uris && editedItem.file_uris.length > 1) {
       toast.info(`Downloading ${editedItem.file_uris.length} files...`);
-      
+
       for (let i = 0; i < editedItem.file_uris.length; i++) {
         await handleDownloadFile(i);
         // Add a small delay between downloads to avoid overwhelming the browser
@@ -215,11 +215,11 @@ export function ArchiveDetailModal({
           await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
-      
+
       toast.success('All files downloaded');
       return;
     }
-    
+
     // Single file download
     await handleDownloadFile(0);
   };
@@ -237,7 +237,7 @@ export function ArchiveDetailModal({
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
-          
+
           if (editedItem.file_uris && editedItem.file_uris.length === 1) {
             toast.success('Download started...');
           }
@@ -246,7 +246,7 @@ export function ArchiveDetailModal({
       } catch (apiError) {
         console.warn('Backend download API failed, falling back to direct URL:', apiError);
       }
-      
+
       // Fallback: use direct URL from file_uris
       let fileUrl: string | undefined;
       if (editedItem.file_uris && editedItem.file_uris.length > fileIndex) {
@@ -254,13 +254,13 @@ export function ArchiveDetailModal({
       } else {
         fileUrl = normalizeFileUri(editedItem.fileUrl);
       }
-      
+
       // Check if the URL is a GenAI URL (which requires API key)
       if (fileUrl && fileUrl.includes('generativelanguage.googleapis.com')) {
         toast.error('Direct download not available. This file requires API authentication.');
         return;
       }
-      
+
       if (fileUrl) {
         // For Supabase URLs, create a download link
         const link = document.createElement('a');
@@ -270,7 +270,7 @@ export function ArchiveDetailModal({
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        
+
         if (editedItem.file_uris && editedItem.file_uris.length === 1) {
           toast.success('Download started...');
         }
@@ -357,257 +357,257 @@ export function ArchiveDetailModal({
 
       <ModalBody className="p-0 flex-1 min-h-0 flex flex-col overflow-auto">
         <div className="p-6 space-y-6 flex-1 min-h-0">
-            {/* Description */}
-            <div>
-              <h3 className="text-sm font-medium text-stone-700 mb-2">Description</h3>
-              {isEditMode ? (
-                <Textarea
-                  value={editedItem.description}
-                  onChange={(e) => setEditedItem({ ...editedItem, description: e.target.value })}
-                  placeholder="Enter description"
-                  rows={4}
-                  className="resize-none"
-                />
-              ) : (
-                <div className="space-y-2">
-                  <div
-                    className={`text-stone-600 whitespace-pre-wrap break-words max-w-full overflow-hidden transition-all ${
-                      isDescriptionExpanded ? 'max-h-none' : 'max-h-32'
+          {/* Description */}
+          <div>
+            <h3 className="text-sm font-medium text-stone-700 mb-2">Description</h3>
+            {isEditMode ? (
+              <Textarea
+                value={editedItem.description}
+                onChange={(e) => setEditedItem({ ...editedItem, description: e.target.value })}
+                placeholder="Enter description"
+                rows={4}
+                className="resize-none"
+              />
+            ) : (
+              <div className="space-y-2">
+                <div
+                  className={`text-stone-600 whitespace-pre-wrap break-words max-w-full overflow-hidden transition-all ${isDescriptionExpanded ? 'max-h-none' : 'max-h-32'
                     }`}
-                  >
-                    {editedItem.description}
-                  </div>
-                  {editedItem.description.length > 200 && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setIsDescriptionExpanded(!isDescriptionExpanded)}
-                      className="text-forest hover:text-forest/80 p-0 h-auto font-normal flex items-center gap-1"
-                    >
-                      {isDescriptionExpanded ? (
-                        <>
-                          Show Less <ChevronUp className="w-3 h-3" />
-                        </>
-                      ) : (
-                        <>
-                          Show More <ChevronDown className="w-3 h-3" />
-                        </>
-                      )}
-                    </Button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Type */}
-            {isEditMode && (
-              <div>
-                <h3 className="text-sm font-medium text-stone-700 mb-2">Type</h3>
-                <Select
-                  value={editedItem.type}
-                  onValueChange={(value: 'image' | 'video' | 'document' | 'audio') =>
-                    setEditedItem({ ...editedItem, type: value })
-                  }
                 >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="image">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-4 h-4" />
-                        Image
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="video">
-                      <div className="flex items-center gap-2">
-                        <Video className="w-4 h-4" />
-                        Video
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="audio">
-                      <div className="flex items-center gap-2">
-                        <Music className="w-4 h-4" />
-                        Audio
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="document">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-4 h-4" />
-                        Document
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                  {editedItem.description}
+                </div>
+                {editedItem.description.length > 200 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setIsDescriptionExpanded(!isDescriptionExpanded)}
+                    className="text-forest hover:text-forest/80 p-0 h-auto font-normal flex items-center gap-1"
+                  >
+                    {isDescriptionExpanded ? (
+                      <>
+                        Show Less <ChevronUp className="w-3 h-3" />
+                      </>
+                    ) : (
+                      <>
+                        Show More <ChevronDown className="w-3 h-3" />
+                      </>
+                    )}
+                  </Button>
+                )}
               </div>
             )}
+          </div>
 
-            {/* File URL */}
+          {/* Type */}
+          {isEditMode && (
             <div>
-              <h3 className="text-sm font-medium text-stone-700 mb-2">File URL</h3>
-              {isEditMode ? (
-                <Input
-                  value={editedItem.fileUrl}
-                  onChange={(e) => setEditedItem({ ...editedItem, fileUrl: e.target.value })}
-                  placeholder="https://example.com/file.pdf"
-                />
-              ) : (
-                <>
-                  {(() => {
-                    const url = normalizeFileUri(editedItem.fileUrl) || editedItem.fileUrl;
-                    const isGenAIUrl = url && url.includes('generativelanguage.googleapis.com');
-                    
-                    if (isGenAIUrl) {
-                      return (
-                        <div className="flex items-start gap-2">
-                          <p className="text-sm text-stone-600 break-all flex-1 font-mono">
-                            {url}
-                          </p>
-                          <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200 shrink-0">
-                            API Access Only
-                          </span>
-                        </div>
-                      );
-                    }
-                    
+              <h3 className="text-sm font-medium text-stone-700 mb-2">Type</h3>
+              <Select
+                value={editedItem.type}
+                onValueChange={(value: 'image' | 'video' | 'document' | 'audio') =>
+                  setEditedItem({ ...editedItem, type: value })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="image">
+                    <div className="flex items-center gap-2">
+                      <FileText className="w-4 h-4" />
+                      Image
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="video">
+                    <div className="flex items-center gap-2">
+                      <Video className="w-4 h-4" />
+                      Video
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="audio">
+                    <div className="flex items-center gap-2">
+                      <Music className="w-4 h-4" />
+                      Audio
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="document">
+                    <div className="flex items-center gap-2">
+                      <FileText className="w-4 h-4" />
+                      Document
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* File URL */}
+          <div>
+            <h3 className="text-sm font-medium text-stone-700 mb-2">File URL</h3>
+            {isEditMode ? (
+              <Input
+                value={editedItem.fileUrl}
+                onChange={(e) => setEditedItem({ ...editedItem, fileUrl: e.target.value })}
+                placeholder="https://example.com/file.pdf"
+                disabled
+              />
+            ) : (
+              <>
+                {(() => {
+                  const url = normalizeFileUri(editedItem.fileUrl) || editedItem.fileUrl;
+                  const isGenAIUrl = url && url.includes('generativelanguage.googleapis.com');
+
+                  if (isGenAIUrl) {
                     return (
+                      <div className="flex items-start gap-2">
+                        <p className="text-sm text-stone-600 break-all flex-1 font-mono">
+                          {url}
+                        </p>
+                        <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200 shrink-0">
+                          API Access Only
+                        </span>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <a
+                      href={url || '#'}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-forest hover:underline flex items-center gap-1 break-all"
+                      onClick={(e) => {
+                        if (!url) {
+                          e.preventDefault();
+                          toast.error('File URL is not available');
+                        }
+                      }}
+                    >
+                      {url}
+                      <ExternalLink className="w-3 h-3 shrink-0" />
+                    </a>
+                  );
+                })()}
+              </>
+            )}
+          </div>
+
+          {/* Additional File URIs */}
+          {editedItem.file_uris && editedItem.file_uris.length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium text-stone-700 mb-2">
+                Additional Files ({editedItem.file_uris.length})
+              </h3>
+              <div className="space-y-2">
+                {editedItem.file_uris.map((uri, index) => {
+                  const normalizedUrl = normalizeFileUri(uri);
+                  const isGenAIUrl = normalizedUrl && normalizedUrl.includes('generativelanguage.googleapis.com');
+
+                  if (isGenAIUrl) {
+                    return (
+                      <div key={index} className="flex items-center gap-2 text-sm">
+                        <FileText className="w-3 h-3 shrink-0 text-stone-400" />
+                        <span className="text-stone-600">File {index + 1}</span>
+                        <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200">
+                          API Access Only
+                        </span>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={index} className="flex items-center gap-2 text-sm">
+                      <FileText className="w-3 h-3 shrink-0 text-stone-600" />
                       <a
-                        href={url || '#'}
+                        href={normalizedUrl || '#'}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-forest hover:underline flex items-center gap-1 break-all"
+                        className="text-forest hover:underline flex items-center gap-1 break-all flex-1"
                         onClick={(e) => {
-                          if (!url) {
+                          if (!normalizedUrl) {
                             e.preventDefault();
                             toast.error('File URL is not available');
                           }
                         }}
                       >
-                        {url}
+                        {normalizedUrl ? `File ${index + 1}` : `File ${index + 1} (unavailable)`}
                         <ExternalLink className="w-3 h-3 shrink-0" />
                       </a>
-                    );
-                  })()}
-                </>
+                      {normalizedUrl && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDownloadFile(index)}
+                          className="h-7 px-2"
+                          title="Download this file"
+                        >
+                          <Download className="w-3 h-3" />
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Tags */}
+          <div>
+            <h3 className="text-sm font-medium text-stone-700 mb-2 flex items-center gap-1">
+              <Tag className="w-4 h-4" />
+              Tags
+            </h3>
+            <div className="flex flex-wrap gap-2 mb-2">
+              {editedItem.tags.map((tag) => (
+                <Badge key={tag} variant="outline" className="text-sm">
+                  {tag}
+                  {isEditMode && (
+                    <button
+                      onClick={() => handleRemoveTag(tag)}
+                      className="ml-1 hover:text-red-600"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </Badge>
+              ))}
+              {editedItem.tags.length === 0 && !isEditMode && (
+                <span className="text-sm text-stone-400">No tags</span>
               )}
             </div>
-
-            {/* Additional File URIs */}
-            {editedItem.file_uris && editedItem.file_uris.length > 0 && (
-              <div>
-                <h3 className="text-sm font-medium text-stone-700 mb-2">
-                  Additional Files ({editedItem.file_uris.length})
-                </h3>
-                <div className="space-y-2">
-                  {editedItem.file_uris.map((uri, index) => {
-                    const normalizedUrl = normalizeFileUri(uri);
-                    const isGenAIUrl = normalizedUrl && normalizedUrl.includes('generativelanguage.googleapis.com');
-                    
-                    if (isGenAIUrl) {
-                      return (
-                        <div key={index} className="flex items-center gap-2 text-sm">
-                          <FileText className="w-3 h-3 shrink-0 text-stone-400" />
-                          <span className="text-stone-600">File {index + 1}</span>
-                          <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200">
-                            API Access Only
-                          </span>
-                        </div>
-                      );
-                    }
-                    
-                    return (
-                      <div key={index} className="flex items-center gap-2 text-sm">
-                        <FileText className="w-3 h-3 shrink-0 text-stone-600" />
-                        <a
-                          href={normalizedUrl || '#'}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-forest hover:underline flex items-center gap-1 break-all flex-1"
-                          onClick={(e) => {
-                            if (!normalizedUrl) {
-                              e.preventDefault();
-                              toast.error('File URL is not available');
-                            }
-                          }}
-                        >
-                          {normalizedUrl ? `File ${index + 1}` : `File ${index + 1} (unavailable)`}
-                          <ExternalLink className="w-3 h-3 shrink-0" />
-                        </a>
-                        {normalizedUrl && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDownloadFile(index)}
-                            className="h-7 px-2"
-                            title="Download this file"
-                          >
-                            <Download className="w-3 h-3" />
-                          </Button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+            {isEditMode && (
+              <div className="flex gap-2">
+                <Input
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddTag())}
+                  placeholder="Add a tag"
+                  className="flex-1"
+                />
+                <Button onClick={handleAddTag} variant="outline" size="sm">
+                  Add
+                </Button>
               </div>
             )}
+          </div>
 
-            {/* Tags */}
-            <div>
-              <h3 className="text-sm font-medium text-stone-700 mb-2 flex items-center gap-1">
-                <Tag className="w-4 h-4" />
-                Tags
-              </h3>
-              <div className="flex flex-wrap gap-2 mb-2">
-                {editedItem.tags.map((tag) => (
-                  <Badge key={tag} variant="outline" className="text-sm">
-                    {tag}
-                    {isEditMode && (
-                      <button
-                        onClick={() => handleRemoveTag(tag)}
-                        className="ml-1 hover:text-red-600"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    )}
-                  </Badge>
-                ))}
-                {editedItem.tags.length === 0 && !isEditMode && (
-                  <span className="text-sm text-stone-400">No tags</span>
-                )}
+          {/* Metadata */}
+          <div className="pt-4 border-t border-stone-200">
+            <h3 className="text-sm font-medium text-stone-700 mb-2">Metadata</h3>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-stone-500">Item ID:</span>
+                <p className="text-stone-800 font-mono text-xs mt-1">{editedItem.id}</p>
               </div>
-              {isEditMode && (
-                <div className="flex gap-2">
-                  <Input
-                    value={tagInput}
-                    onChange={(e) => setTagInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddTag())}
-                    placeholder="Add a tag"
-                    className="flex-1"
-                  />
-                  <Button onClick={handleAddTag} variant="outline" size="sm">
-                    Add
-                  </Button>
-                </div>
-              )}
-            </div>
-
-            {/* Metadata */}
-            <div className="pt-4 border-t border-stone-200">
-              <h3 className="text-sm font-medium text-stone-700 mb-2">Metadata</h3>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <span className="text-stone-500">Item ID:</span>
-                  <p className="text-stone-800 font-mono text-xs mt-1">{editedItem.id}</p>
-                </div>
-                <div>
-                  <span className="text-stone-500">Date Added:</span>
-                  <p className="text-stone-800 mt-1">
-                    {new Date(editedItem.date).toLocaleString('en-MY')}
-                  </p>
-                </div>
+              <div>
+                <span className="text-stone-500">Date Added:</span>
+                <p className="text-stone-800 mt-1">
+                  {new Date(editedItem.date).toLocaleString('en-MY')}
+                </p>
               </div>
             </div>
           </div>
+        </div>
       </ModalBody>
     </Modal>
   );

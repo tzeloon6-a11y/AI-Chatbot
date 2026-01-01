@@ -25,6 +25,7 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
     description: '',
   });
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [userContext, setUserContext] = useState('');
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingMetadata, setIsGeneratingMetadata] = useState(false);
@@ -42,8 +43,8 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
       // Determine media types from files
       const mediaTypes = determineMediaTypes(files);
 
-      // Call API to generate metadata
-      const metadata = await generateMetadata(files, mediaTypes);
+      // Call API to generate metadata with user context
+      const metadata = await generateMetadata(files, mediaTypes, userContext || undefined);
 
       // Update form data with generated metadata
       setFormData(prev => ({
@@ -67,14 +68,25 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
     }
   };
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const filesArray = Array.from(e.target.files);
-      setSelectedFiles(filesArray);
+      const newFilesArray = Array.from(e.target.files);
+
+      // Append new files to existing selection, avoiding duplicates
+      setSelectedFiles((prevFiles) => {
+        const existingFileKeys = new Set(
+          prevFiles.map((f) => `${f.name}-${f.size}`)
+        );
+        const uniqueNewFiles = newFilesArray.filter(
+          (f) => !existingFileKeys.has(`${f.name}-${f.size}`)
+        );
+        return [...prevFiles, ...uniqueNewFiles];
+      });
+
       setMetadataGenerated(false);
-      
-      // Automatically generate metadata
-      await handleGenerateMetadata(filesArray);
+
+      // Reset the input value so the same file can be selected again if removed
+      e.target.value = '';
     }
   };
 
@@ -119,7 +131,7 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
     try {
       // Determine media types from files
       const mediaTypes = determineMediaTypes(selectedFiles);
-      
+
       // Parse tags
       const tags = formData.tags
         .split(',')
@@ -155,10 +167,10 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
 
       // Map backend response to frontend ArchiveItem format
       // Use first file URI as fileUrl, or first file_uri from response
-      const fileUrl = response.file_uris && response.file_uris.length > 0 
-        ? response.file_uris[0] 
+      const fileUrl = response.file_uris && response.file_uris.length > 0
+        ? response.file_uris[0]
         : 'https://via.placeholder.com/400';
-      
+
       // Use first media type or default to the selected type
       const primaryType = response.media_types && response.media_types.length > 0
         ? response.media_types[0]
@@ -193,6 +205,7 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
         description: '',
       });
       setSelectedFiles([]);
+      setUserContext('');
       setUploadProgress(0);
       setMetadataGenerated(false);
       onClose();
@@ -232,7 +245,7 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
                 accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
                 multiple
               />
-              
+
               {selectedFiles.length > 0 ? (
                 <div className="space-y-2">
                   {selectedFiles.map((file, index) => (
@@ -283,7 +296,47 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
                 </div>
               )}
             </div>
-            
+            {/* User Context Input - Optional description for AI */}
+            {selectedFiles.length > 0 && !metadataGenerated && (
+              <div className="mt-4">
+                <Label htmlFor="userContext" className="flex items-center gap-2">
+                  Describe Your Files (Optional)
+                  <span className="text-xs text-stone-400 font-normal">for better AI suggestions</span>
+                </Label>
+                <Textarea
+                  id="userContext"
+                  value={userContext}
+                  onChange={(e) => setUserContext(e.target.value)}
+                  placeholder="e.g., These are photos of traditional Batik patterns from Kelantan, taken at a heritage museum..."
+                  rows={2}
+                  className="mt-1"
+                  disabled={isGeneratingMetadata}
+                />
+                <p className="text-xs text-stone-500 mt-1">
+                  Help the AI understand your files better by providing context, location, or any relevant details.
+                </p>
+              </div>
+            )}
+
+            {/* AI Generate Metadata Button */}
+            {selectedFiles.length > 0 && !isGeneratingMetadata && !metadataGenerated && (
+              <div className="mt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => handleGenerateMetadata(selectedFiles)}
+                  disabled={isGeneratingMetadata || selectedFiles.length === 0}
+                  className="w-full border-forest text-forest hover:bg-forest hover:text-white transition-colors"
+                >
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Generate Metadata with AI ({selectedFiles.length} file{selectedFiles.length > 1 ? 's' : ''})
+                </Button>
+                <p className="text-xs text-stone-500 mt-2 text-center">
+                  AI will analyze your files{userContext ? ' with your description' : ''} to suggest title, tags, and description
+                </p>
+              </div>
+            )}
+
             {isGeneratingMetadata && (
               <div className="mt-4 space-y-2">
                 <div className="flex items-center justify-between text-sm">
@@ -294,11 +347,28 @@ export function AddArchiveModal({ isOpen, onClose, onAdd }: AddArchiveModalProps
                 </div>
                 <Progress value={50} className="mt-2" />
                 <p className="text-xs text-stone-500">
-                  AI is analyzing your files to suggest title, tags, and description.
+                  AI is analyzing {selectedFiles.length} file{selectedFiles.length > 1 ? 's' : ''} to suggest title, tags, and description.
                 </p>
               </div>
             )}
-            
+
+            {/* Show regenerate button if metadata was already generated */}
+            {metadataGenerated && !isGeneratingMetadata && (
+              <div className="mt-4">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleGenerateMetadata(selectedFiles)}
+                  disabled={isGeneratingMetadata || selectedFiles.length === 0}
+                  className="text-forest hover:text-forest hover:bg-forest/10"
+                >
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Regenerate Metadata
+                </Button>
+              </div>
+            )}
+
             {isUploading && (
               <div className="mt-4 space-y-2">
                 <div className="flex items-center justify-between text-sm">
