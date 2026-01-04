@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: ai-chatbot-backend
+    env: docker
+    region: singapore
+    plan: free
+    rootDir: backend
+    envVars:
+      - key: PORT
+        value: 8000
