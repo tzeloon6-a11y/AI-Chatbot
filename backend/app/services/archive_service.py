@@ -517,7 +517,9 @@ Begin your analysis now. Remember: MAXIMUM 800 WORDS."""
     async def generate_metadata_suggestions(
         self,
         uploaded_files: List,
-        media_types: List[str]
+        media_types: List[str],
+        file_names: List[str] = None,
+        user_context: str = None
     ) -> dict:
         """
         Generate metadata suggestions (title, tags, description) from uploaded content.
@@ -525,6 +527,8 @@ Begin your analysis now. Remember: MAXIMUM 800 WORDS."""
         Args:
             uploaded_files: List of uploaded file objects from Google GenAI
             media_types: List of media types
+            file_names: Optional list of original file names for additional context
+            user_context: Optional user-provided context/description of the files
             
         Returns:
             Dictionary with 'title', 'tags', and 'description'
@@ -536,14 +540,37 @@ Begin your analysis now. Remember: MAXIMUM 800 WORDS."""
             # Build prompt for metadata generation
             media_types_str = ", ".join(media_types)
             
+            # Build additional context section
+            additional_context = []
+            
+            if file_names and len(file_names) > 0:
+                file_names_str = ", ".join(file_names)
+                additional_context.append(f"**File Names**: {file_names_str}")
+            
+            if user_context:
+                additional_context.append(f"**User's Description**: {user_context}")
+            
+            context_section = ""
+            if additional_context:
+                context_section = f"""
+# Additional Context Provided
+
+{chr(10).join(additional_context)}
+
+Use this information to guide your analysis and generate more accurate, relevant metadata.
+
+---
+"""
+            
             prompt = f"""# Role and Context
 
 You are a Malaysian cultural heritage expert analyzing materials for an archiving system. You need to generate metadata (title, tags, and description) based on the uploaded content.
 
 **Media Types**: {media_types_str}
+**Number of Files**: {len(uploaded_files)}
 
 ---
-
+{context_section}
 # Your Task
 
 Analyze the uploaded materials and generate:

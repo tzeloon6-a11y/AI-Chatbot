@@ -1,9 +1,8 @@
-import { useState } from 'react';
-import { Upload, Tag, TrendingUp, Clock, FileCheck, AlertCircle, BarChart3 } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { Upload, Tag, TrendingUp, Clock, FileCheck, BarChart3, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { Progress } from './ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { ScrollArea } from './ui/scroll-area';
 import type { ArchiveItem } from '../App';
@@ -24,34 +23,46 @@ export function CuratorDashboard({ archives, setArchives }: CuratorDashboardProp
   const [selectedItem, setSelectedItem] = useState<ArchiveItem | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
 
-  // Calculate statistics
-  const stats = {
-    totalItems: 12847,
-    thisMonth: 234,
-    pendingReview: 18,
-    storageUsed: 68,
-  };
+  // Calculate statistics from actual data
+  const stats = useMemo(() => {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    
+    const thisMonthCount = archives.filter(archive => {
+      const createdDate = new Date(archive.date);
+      return createdDate >= startOfMonth;
+    }).length;
 
-  const recentUploads = archives.slice(0, 5);
-  
-  const popularTags = [
-    { name: 'batik', count: 1247 },
-    { name: 'heritage', count: 982 },
-    { name: 'traditional', count: 856 },
-    { name: 'architecture', count: 743 },
-    { name: 'crafts', count: 621 },
-    { name: 'costume', count: 512 },
-    { name: 'oral history', count: 389 },
-    { name: 'colonial', count: 267 },
-  ];
+    return {
+      totalItems: archives.length,
+      thisMonth: thisMonthCount,
+    };
+  }, [archives]);
 
-  const recentActivity = [
-    { action: 'Upload', item: 'Traditional Batik Pattern', user: 'Ahmad Ibrahim', time: '2 hours ago' },
-    { action: 'Edit', item: 'Heritage Building Documentation', user: 'Siti Nurhaliza', time: '5 hours ago' },
-    { action: 'Delete', item: 'Duplicate Image File', user: 'Lee Wei Ming', time: '1 day ago' },
-    { action: 'Upload', item: 'Oral History Interview', user: 'Ahmad Ibrahim', time: '1 day ago' },
-    { action: 'Tag Update', item: 'Wayang Kulit Performance', user: 'Siti Nurhaliza', time: '2 days ago' },
-  ];
+  // Get recent uploads sorted by date
+  const recentUploads = useMemo(() => {
+    return [...archives]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 10);
+  }, [archives]);
+
+  // Calculate popular tags from actual data
+  const popularTags = useMemo(() => {
+    const tagCounts: Record<string, number> = {};
+    
+    archives.forEach(archive => {
+      if (archive.tags && archive.tags.length > 0) {
+        archive.tags.forEach(tag => {
+          tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+        });
+      }
+    });
+
+    return Object.entries(tagCounts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+  }, [archives]);
 
   const handleBulkTagging = () => {
     toast.success('Bulk tagging interface coming soon');
@@ -109,23 +120,21 @@ export function CuratorDashboard({ archives, setArchives }: CuratorDashboardProp
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl text-stone-800">+{stats.thisMonth}</div>
-            <p className="text-xs text-stone-500 mt-1">
-              <span className="text-green-600">↑ 12%</span> from last month
-            </p>
+            <div className="text-2xl text-stone-800">{stats.thisMonth}</div>
+            <p className="text-xs text-stone-500 mt-1">New items added this month</p>
           </CardContent>
         </Card>
 
         <Card className="flex-1">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm flex items-center justify-between">
-              Storage Used
-              <FileCheck className="w-4 h-4 text-blue-500" />
+              Total Tags
+              <Tag className="w-4 h-4 text-blue-500" />
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl text-stone-800">{stats.storageUsed}%</div>
-            <Progress value={stats.storageUsed} className="mt-2 h-1" />
+            <div className="text-2xl text-stone-800">{popularTags.length}</div>
+            <p className="text-xs text-stone-500 mt-1">Unique tags in collection</p>
           </CardContent>
         </Card>
       </div>
@@ -135,8 +144,7 @@ export function CuratorDashboard({ archives, setArchives }: CuratorDashboardProp
         <TabsList className="w-full flex justify-start gap-3 overflow-x-auto">
           <TabsTrigger value="recent" className="flex-1 min-w-[150px]">Recent Uploads</TabsTrigger>
           <TabsTrigger value="tags" className="flex-1 min-w-[150px]">Tag Management</TabsTrigger>
-          <TabsTrigger value="activity" className="flex-1 min-w-[150px]">Activity Log</TabsTrigger>
-          <TabsTrigger value="tools" className="flex-1 min-w-[150px]">Curator Tools</TabsTrigger>
+          {/* <TabsTrigger value="tools" className="flex-1 min-w-[150px]">Curator Tools</TabsTrigger> */}
         </TabsList>
 
 
@@ -148,22 +156,30 @@ export function CuratorDashboard({ archives, setArchives }: CuratorDashboardProp
                 <Clock className="w-5 h-5" />
                 Recently Added Items
               </CardTitle>
-              <CardDescription>Latest additions to the archive (last 30 days)</CardDescription>
+              <CardDescription>Latest additions to the archive</CardDescription>
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[500px]">
-                <div className="space-y-3">
-                  {recentUploads.map((item) => (
-                    <ArchiveCard
-                      key={item.id}
-                      item={item}
-                      onView={(it) => { setSelectedItem(it); setIsEditMode(false); setDetailOpen(true); }}
-                      onEdit={(it) => { setSelectedItem(it); setIsEditMode(true); setDetailOpen(true); }}
-                      onDelete={handleDeleteArchive}
-                      viewMode="list"
-                    />
-                  ))}
-                </div>
+                {recentUploads.length > 0 ? (
+                  <div className="space-y-3">
+                    {recentUploads.map((item) => (
+                      <ArchiveCard
+                        key={item.id}
+                        item={item}
+                        onView={(it) => { setSelectedItem(it); setIsEditMode(false); setDetailOpen(true); }}
+                        onEdit={(it) => { setSelectedItem(it); setIsEditMode(true); setDetailOpen(true); }}
+                        onDelete={handleDeleteArchive}
+                        viewMode="list"
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-[400px] text-stone-500">
+                    <Clock className="w-12 h-12 mb-4 opacity-50" />
+                    <p className="text-lg font-medium">No archives yet</p>
+                    <p className="text-sm mt-2">Upload your first item to get started</p>
+                  </div>
+                )}
               </ScrollArea>
             </CardContent>
           </Card>
@@ -180,81 +196,41 @@ export function CuratorDashboard({ archives, setArchives }: CuratorDashboardProp
               <CardDescription>Manage tags and metadata across your collection</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div>
-                <h3 className="text-stone-800 mb-3">Most Used Tags</h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {popularTags.map((tag) => (
-                    <div
-                      key={tag.name}
-                      className="border border-stone-200 rounded-lg p-3 hover:border-forest cursor-pointer transition-colors"
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <Badge variant="outline">{tag.name}</Badge>
-                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
-                          ⋮
-                        </Button>
+              {popularTags.length > 0 ? (
+                <div>
+                  <h3 className="text-stone-800 mb-3">Most Used Tags</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {popularTags.map((tag) => (
+                      <div
+                        key={tag.name}
+                        className="border border-stone-200 rounded-lg p-3 hover:border-forest cursor-pointer transition-colors"
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <Badge variant="outline">{tag.name}</Badge>
+                        </div>
+                        <p className="text-xs text-stone-500">{tag.count.toLocaleString()} {tag.count === 1 ? 'item' : 'items'}</p>
                       </div>
-                      <p className="text-xs text-stone-500">{tag.count.toLocaleString()} items</p>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-stone-500">
+                  <Tag className="w-12 h-12 mb-4 opacity-50" />
+                  <p className="text-lg font-medium">No tags yet</p>
+                  <p className="text-sm mt-2">Tags will appear here as you add them to archives</p>
+                </div>
+              )}
 
               <div className="flex gap-2">
-                <Button variant="outline" className="flex-1">
-                  <Tag className="w-4 h-4 mr-2" />
-                  Create New Tag
-                </Button>
                 <Button variant="outline" className="flex-1" onClick={handleBulkTagging}>
                   <Tag className="w-4 h-4 mr-2" />
                   Bulk Tagging
                 </Button>
-                <Button variant="outline" className="flex-1">
-                  <Tag className="w-4 h-4 mr-2" />
-                  Merge Tags
+                <Button variant="outline" className="flex-1" onClick={handleExport}>
+                  <FileCheck className="w-4 h-4 mr-2" />
+                  Export Data
                 </Button>
               </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Activity Log */}
-        <TabsContent value="activity" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Clock className="w-5 h-5" />
-                Activity Log
-              </CardTitle>
-              <CardDescription>Recent actions by curators</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ScrollArea className="h-[500px]">
-                <div className="space-y-3">
-                  {recentActivity.map((activity, idx) => (
-                    <div key={idx} className="flex items-start gap-3 pb-3 border-b border-stone-100 last:border-0">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                        activity.action === 'Upload' ? 'bg-green-100 text-green-600' :
-                        activity.action === 'Edit' ? 'bg-blue-100 text-blue-600' :
-                        activity.action === 'Delete' ? 'bg-red-100 text-red-600' :
-                        'bg-forest text-white'
-                      }`}>
-                        {activity.action === 'Upload' && <Upload className="w-4 h-4" />}
-                        {activity.action === 'Edit' && <FileCheck className="w-4 h-4" />}
-                        {activity.action === 'Delete' && <AlertCircle className="w-4 h-4" />}
-                        {activity.action === 'Tag Update' && <Tag className="w-4 h-4" />}
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-sm text-stone-800">
-                          <span className="font-medium">{activity.user}</span> {activity.action.toLowerCase()}d{' '}
-                          <span className="font-medium">{activity.item}</span>
-                        </p>
-                        <p className="text-xs text-stone-500">{activity.time}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </ScrollArea>
             </CardContent>
           </Card>
         </TabsContent>

@@ -98,7 +98,7 @@ interface ModalBodyProps {
 
 export function ModalBody({ children, className }: ModalBodyProps) {
   return (
-    <div className={cn('overflow-y-auto flex-grow px-6 py-0 min-h-0', className)}>
+    <div className={cn('overflow-y-auto flex-1 px-6 py-0 min-h-0 max-h-full', className)}>
       {children}
     </div>
   );

@@ -83,6 +83,8 @@ async def get_archives():
 async def generate_metadata(
     files: List[UploadFile] = File(..., description="Files to analyze for metadata generation"),
     media_types: str = Form(..., description="Comma-separated list of media types (image,video,audio,document)"),
+    file_names: str = Form(default="", description="Comma-separated list of original file names for context"),
+    user_context: str = Form(default="", description="Optional user-provided context/description of the files"),
     archive_service: ArchiveService = Depends(get_archive_service)
 ):
     """
@@ -105,13 +107,18 @@ async def generate_metadata(
         # Convert media types to strings for service
         media_types_str = [mt.value for mt in media_type_list]
         
+        # Parse file names
+        file_names_list = [fn.strip() for fn in file_names.split(",") if fn.strip()] if file_names else []
+        
         # Upload files to GenAI
         uploaded_files, storage_paths, _ = await archive_service.upload_files_to_genai(files)
         
-        # Generate metadata suggestions
+        # Generate metadata suggestions with additional context
         metadata = await archive_service.generate_metadata_suggestions(
             uploaded_files=uploaded_files,
-            media_types=media_types_str
+            media_types=media_types_str,
+            file_names=file_names_list,
+            user_context=user_context.strip() if user_context else None
         )
         
         # Clean up uploaded files from GenAI and storage (since this is just for suggestions)

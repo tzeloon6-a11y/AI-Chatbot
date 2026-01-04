@@ -17,19 +17,19 @@ export function SettingsPanel() {
     language: 'en-my',
     timezone: 'Asia/Kuala_Lumpur',
     itemsPerPage: '20',
-    
+
     // AI Settings
     aiModel: 'gpt-4',
     searchConfidence: '0.7',
     autoTag: true,
     suggestMetadata: true,
-    
+
     // Notifications
     emailNotifications: true,
     newUploads: true,
     searchAlerts: false,
     systemUpdates: true,
-    
+
     // Database
     autoBackup: true,
     backupFrequency: 'daily',

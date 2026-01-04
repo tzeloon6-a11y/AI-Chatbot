@@ -71,7 +71,8 @@ export interface AISearchStreamUpdate {
  */
 export async function generateMetadata(
   files: File[],
-  mediaTypes: ('image' | 'video' | 'audio' | 'document')[]
+  mediaTypes: ('image' | 'video' | 'audio' | 'document')[],
+  userContext?: string
 ): Promise<MetadataSuggestions> {
   try {
     const formData = new FormData();
@@ -83,6 +84,15 @@ export async function generateMetadata(
 
     // Append media types
     formData.append('media_types', mediaTypes.join(','));
+
+    // Append file names for AI context
+    const fileNames = files.map((file) => file.name);
+    formData.append('file_names', fileNames.join(','));
+
+    // Append user context if provided
+    if (userContext && userContext.trim()) {
+      formData.append('user_context', userContext.trim());
+    }
 
     const response = await fetch(`${API_BASE_URL}/archives/generate-metadata`, {
       method: 'POST',
@@ -122,15 +132,15 @@ export async function createArchive(
     // Append form fields
     formData.append('title', request.title);
     formData.append('media_types', request.media_types.join(','));
-    
+
     if (request.tags && request.tags.length > 0) {
       formData.append('tags', request.tags.join(','));
     }
-    
+
     if (request.description) {
       formData.append('description', request.description);
     }
-    
+
     if (request.dates && request.dates.length > 0) {
       formData.append('dates', request.dates.join(','));
     }
@@ -301,7 +311,7 @@ export async function aiSearchArchivesStream(
 
     while (true) {
       const { done, value } = await reader.read();
-      
+
       if (done) {
         break;
       }
@@ -319,7 +329,7 @@ export async function aiSearchArchivesStream(
           try {
             const update: AISearchStreamUpdate = JSON.parse(data);
             onUpdate(update);
-            
+
             // Stop if we receive done or error
             if (update.type === 'done' || update.type === 'error') {
               return;

@@ -68,18 +68,18 @@ function App() {
     const fetchArchives = async () => {
       try {
         const response = await getArchives();
-        
+
         // Map backend response to frontend ArchiveItem format
         const mappedArchives: ArchiveItem[] = response.map((archive) => {
           const normalizedUris = Array.isArray(archive.file_uris)
             ? archive.file_uris
-                .map((uri) => normalizeFileUri(uri))
-                .filter((uri): uri is string => Boolean(uri))
+              .map((uri) => normalizeFileUri(uri))
+              .filter((uri): uri is string => Boolean(uri))
             : [];
 
           // Use first file URI as fileUrl
           const fileUrl = normalizedUris[0] ?? 'https://via.placeholder.com/400';
-          
+
           // Use first media type
           const primaryType = archive.media_types && archive.media_types.length > 0
             ? archive.media_types[0]
@@ -135,30 +135,30 @@ You can also upload files for AI-assisted tagging and metadata enrichment.`,
   return (
     <div className="flex h-screen bg-stone-50">
       <Sidebar currentView={currentView} onViewChange={setCurrentView} />
-      
+
       <div className="flex flex-col flex-1">
         <TopBar />
-        
+
         <main className="flex-1 overflow-hidden">
           {currentView === 'chat' && (
             <div className="h-full p-6">
-              <ChatPanel 
-                messages={messages} 
+              <ChatPanel
+                messages={messages}
                 setMessages={setMessages}
                 archives={archives}
               />
             </div>
           )}
-          
+
           {currentView === 'dashboard' && (
             <div className="h-full overflow-auto">
-              <CuratorDashboard 
+              <CuratorDashboard
                 archives={archives}
                 setArchives={setArchives}
               />
             </div>
           )}
-          
+
           {currentView === 'settings' && (
             <div className="h-full overflow-auto">
               <SettingsPanel />
@@ -166,7 +166,7 @@ You can also upload files for AI-assisted tagging and metadata enrichment.`,
           )}
         </main>
       </div>
-      
+
       <Toaster />
     </div>
   );
